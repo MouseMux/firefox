@@ -129,7 +129,10 @@ UNIFIED_SOURCES += [
 SOURCES += [
     "CompositorWidgetParent.cpp",
     "InProcessWinCompositorWidget.cpp",
+    "InputFilter.cpp",
     "MediaKeysEventSourceFactory.cpp",
+    "MouseMuxDebugDialog.cpp",
+    "MouseMuxService.cpp",
     "nsBidiKeyboard.cpp",
     "nsFilePicker.cpp",
     "nsSharePicker.cpp",
