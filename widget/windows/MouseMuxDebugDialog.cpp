@@ -201,8 +201,16 @@ void MouseMuxDebugDialog::UpdateStatus() {
   }
 
   bool blocked = InputFilter::IsEnabled();
+  uint32_t ownerHwid = service->GetOwnerHwid();
+
   wchar_t buf[256];
-  swprintf(buf, 256, L"Status: %S | Input: %s", statusText, blocked ? L"BLOCKED" : L"Normal");
+  if (ownerHwid) {
+    swprintf(buf, 256, L"%S | %s | Owner: 0x%X",
+             statusText, blocked ? L"BLOCKED" : L"Normal", ownerHwid);
+  } else {
+    swprintf(buf, 256, L"%S | %s | Owner: None",
+             statusText, blocked ? L"BLOCKED" : L"Normal");
+  }
   ::SetWindowTextW(mStatusLabel, buf);
 
   if (mConnectBtn) {

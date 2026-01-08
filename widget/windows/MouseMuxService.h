@@ -65,6 +65,10 @@ class MouseMuxService {
   using LogCallback = std::function<void(const char*)>;
   void SetLogCallback(LogCallback aCallback);
 
+  // Window ownership - the hwid that clicked on the window owns it
+  uint32_t GetOwnerHwid() const { return mOwnerHwid; }
+  nsWindow* GetOwnedWindow() const { return mOwnedWindow; }
+
  private:
   MouseMuxService();
   ~MouseMuxService();
@@ -115,6 +119,10 @@ class MouseMuxService {
     int screenY = 0;
   };
   std::map<uint32_t, MousePos> mLastMousePos;
+
+  // Window ownership tracking
+  uint32_t mOwnerHwid = 0;
+  nsWindow* mOwnedWindow = nullptr;
 
   LogCallback mLogCallback;
   std::mutex mLogMutex;

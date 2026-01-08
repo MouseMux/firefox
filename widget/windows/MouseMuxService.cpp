@@ -312,7 +312,15 @@ void MouseMuxService::HandleMessage(const std::string& aMessage) {
 }
 
 void MouseMuxService::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScreenY) {
-  nsWindow* window = FindWindowAtPoint(aScreenX, aScreenY);
+  nsWindow* window = nullptr;
+
+  // If this hwid is the owner, always send to owned window
+  if (aHwid == mOwnerHwid && mOwnedWindow) {
+    window = mOwnedWindow;
+  } else {
+    window = FindWindowAtPoint(aScreenX, aScreenY);
+  }
+
   if (!window) return;
 
   HWND hwnd = window->GetWindowHandle();
@@ -339,8 +347,26 @@ void MouseMuxService::HandlePointerButton(uint32_t aHwid, int aScreenX,
   // 0x01=LeftDown, 0x02=LeftUp, 0x04=RightDown, 0x08=RightUp,
   // 0x10=MiddleDown, 0x20=MiddleUp
 
-  nsWindow* window = FindWindowAtPoint(aScreenX, aScreenY);
+  nsWindow* window = nullptr;
+  bool isButtonDown = (aEventFlags & 0x01) || (aEventFlags & 0x04) || (aEventFlags & 0x10);
+
+  // If this hwid is the owner, always send to owned window
+  if (aHwid == mOwnerHwid && mOwnedWindow) {
+    window = mOwnedWindow;
+  } else {
+    window = FindWindowAtPoint(aScreenX, aScreenY);
+  }
+
   if (!window) return;
+
+  // On button down inside a window, this hwid becomes the owner
+  if (isButtonDown && window) {
+    if (aHwid != mOwnerHwid) {
+      mOwnerHwid = aHwid;
+      mOwnedWindow = window;
+      Log("New owner: hwid=0x%x window=%p", aHwid, window);
+    }
+  }
 
   HWND hwnd = window->GetWindowHandle();
   if (!hwnd) return;
@@ -356,13 +382,11 @@ void MouseMuxService::HandlePointerButton(uint32_t aHwid, int aScreenX,
     mButtonState[aHwid] |= MK_LBUTTON;
     WPARAM wParam = BuildMouseWParam(aHwid) | MOUSEMUX_MARKER;
     ::PostMessage(hwnd, WM_LBUTTONDOWN, wParam, lParam);
-    Log("PostMessage WM_LBUTTONDOWN to %p at %d,%d", hwnd, pt.x, pt.y);
   }
   if (aEventFlags & 0x02) {  // Left up
     mButtonState[aHwid] &= ~MK_LBUTTON;
     WPARAM wParam = BuildMouseWParam(aHwid) | MOUSEMUX_MARKER;
     ::PostMessage(hwnd, WM_LBUTTONUP, wParam, lParam);
-    Log("PostMessage WM_LBUTTONUP to %p at %d,%d", hwnd, pt.x, pt.y);
   }
   if (aEventFlags & 0x04) {  // Right down
     mButtonState[aHwid] |= MK_RBUTTON;
@@ -388,7 +412,15 @@ void MouseMuxService::HandlePointerButton(uint32_t aHwid, int aScreenX,
 
 void MouseMuxService::HandlePointerWheel(uint32_t aHwid, int aScreenX,
                                          int aScreenY, int aDelta, bool aIsHorizontal) {
-  nsWindow* window = FindWindowAtPoint(aScreenX, aScreenY);
+  nsWindow* window = nullptr;
+
+  // If this hwid is the owner, always send to owned window
+  if (aHwid == mOwnerHwid && mOwnedWindow) {
+    window = mOwnedWindow;
+  } else {
+    window = FindWindowAtPoint(aScreenX, aScreenY);
+  }
+
   if (!window) return;
 
   HWND hwnd = window->GetWindowHandle();
