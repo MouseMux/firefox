@@ -435,7 +435,9 @@ void MouseMuxService::HandleKeyboard(uint32_t aHwid, uint32_t aVkey,
     lParam |= (1 << 31);  // transition state
   }
 
-  ::PostMessage(hwnd, aMessage, aVkey, lParam);
+  // Add marker to wParam so nsWindow knows this is from MouseMux
+  WPARAM wParam = aVkey | MOUSEMUX_MARKER;
+  ::PostMessage(hwnd, aMessage, wParam, lParam);
 }
 
 void MouseMuxService::HandleUserList(const std::string& aMessage) {
