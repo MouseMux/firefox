@@ -193,6 +193,10 @@
 
 #include "WindowsUIUtils.h"
 
+#include "MouseMuxService.h"
+#include "MouseMuxDebugDialog.h"
+#include "InputFilter.h"
+
 #include "nsWindowDefs.h"
 
 #include "nsCrashOnException.h"
@@ -1281,6 +1285,9 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
 
   RecreateDirectManipulationIfNeeded();
 
+  // Register with MouseMux for multi-mouse support
+  MouseMuxService::GetInstance()->RegisterWindow(this);
+
   return NS_OK;
 }
 
@@ -1309,6 +1316,9 @@ void nsWindow::Destroy() {
   nsCOMPtr<nsIWidget> kungFuDeathGrip(this);
 
   DestroyDirectManipulation();
+
+  // Unregister from MouseMux before window destruction
+  MouseMuxService::GetInstance()->UnregisterWindow(this);
 
   /**
    * On windows the LayerManagerOGL destructor wants the widget to be around for
@@ -4766,6 +4776,37 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
       Preferences::GetBool("intl.keyboard.per_window_layout", false);
   AppShutdownReason shutdownReason = AppShutdownReason::Unknown;
 
+  // MouseMux: Skip native mouse input when blocking is enabled
+  // Allow MouseMux injected messages (marked with MOUSEMUX_MARKER in wParam)
+  if (InputFilter::IsEnabled()) {
+    switch (msg) {
+      case WM_MOUSEMOVE:
+      case WM_LBUTTONDOWN:
+      case WM_LBUTTONUP:
+      case WM_LBUTTONDBLCLK:
+      case WM_RBUTTONDOWN:
+      case WM_RBUTTONUP:
+      case WM_RBUTTONDBLCLK:
+      case WM_MBUTTONDOWN:
+      case WM_MBUTTONUP:
+      case WM_MBUTTONDBLCLK:
+      case WM_MOUSEWHEEL:
+      case WM_MOUSEHWHEEL:
+      case WM_XBUTTONDOWN:
+      case WM_XBUTTONUP:
+      case WM_XBUTTONDBLCLK: {
+        // Check wParam for MouseMux marker (high bit)
+        if (!(wParam & MOUSEMUX_MARKER)) {
+          // Block native mouse - not from MouseMux
+          return true;
+        }
+        // Strip marker before processing
+        wParam &= ~MOUSEMUX_MARKER;
+        break;
+      }
+    }
+  }
+
   // (Large blocks of code should be broken out into OnEvent handlers.)
   switch (msg) {
     // WM_QUERYENDSESSION must be handled by all windows.
@@ -5095,6 +5136,13 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case WM_SYSKEYDOWN:
     case WM_KEYDOWN: {
+      // MouseMux: F12 = emergency exit (disable blocking, disconnect)
+      if (wParam == VK_F12 && InputFilter::IsEnabled()) {
+        InputFilter::Disable();
+        MouseMuxService::GetInstance()->Disconnect();
+        result = true;
+        break;
+      }
       MSG nativeMsg = WinUtils::InitMSG(msg, wParam, lParam, mWnd);
       result = ProcessKeyDownMessage(nativeMsg, nullptr);
       DispatchPendingEvents();
