@@ -5,6 +5,7 @@
 
 #include "MouseMuxClient.h"
 #include "InputFilter.h"
+#include "MouseMuxDebugDialog.h"
 #include <ws2tcpip.h>
 #include <cstdio>
 #include <cstdarg>
@@ -13,7 +14,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define MOUSEMUX_CLIENT_VERSION "5.19"
+#define MOUSEMUX_CLIENT_VERSION "5.25"
 #define MOUSEMUX_BUILD_TIME __DATE__ " " __TIME__
 
 namespace mozilla {
@@ -545,6 +546,47 @@ void MouseMuxClient::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScre
         motionCount, aHwid, aScreenX, aScreenY, owner, isOwner, inWindow);
   }
 
+  // Update hover info on debug dialog for any mouse
+  auto* debugDialog = MouseMuxDebugDialog::GetInstance();
+  if (debugDialog && debugDialog->IsVisible()) {
+    // Check if mouse is over the debug dialog using WindowFromPoint
+    POINT pt = {aScreenX, aScreenY};
+    HWND hwndUnderPoint = ::WindowFromPoint(pt);
+    // Get top-level parent of the window under cursor
+    HWND topLevel = hwndUnderPoint;
+    while (topLevel) {
+      HWND parent = ::GetParent(topLevel);
+      if (!parent) break;
+      topLevel = parent;
+    }
+    // Check if it's the debug dialog by window class
+    wchar_t className[64] = {0};
+    bool overDialog = false;
+    if (topLevel && ::GetClassNameW(topLevel, className, 64)) {
+      if (wcscmp(className, L"MouseMuxOwnerDialog") == 0) {
+        overDialog = true;
+        // Mouse is over debug dialog - update hover info
+        uint32_t userId = 0;
+        {
+          std::lock_guard<std::mutex> lock(mMappingMutex);
+          auto it = mMouseToKeyboard.find(aHwid);
+          if (it != mMouseToKeyboard.end()) {
+            userId = it->second;  // Use keyboard hwid as proxy for user
+          }
+        }
+        debugDialog->SetHoveringUser(aHwid, userId);
+      }
+    }
+    // Track which mouse was hovering and clear when it moves away
+    static uint32_t sLastHoveringMouse = 0;
+    if (overDialog) {
+      sLastHoveringMouse = aHwid;
+    } else if (aHwid == sLastHoveringMouse) {
+      debugDialog->ClearHoveringUser();
+      sLastHoveringMouse = 0;
+    }
+  }
+
   // Only process from owner - no hover (prevents interference)
   if (!isOwner) return;
   
@@ -796,21 +838,16 @@ void MouseMuxClient::FlushLogToUI() {
 }
 
 void MouseMuxClient::ShowDebugDialog() {
-  if (!mDebugDialog) {
-    CreateDebugDialog();
-  }
-  if (mDebugDialog) {
-    ::ShowWindow(mDebugDialog, SW_SHOWNORMAL);
-    ::SetForegroundWindow(mDebugDialog);
-    mDebugDialogVisible = true;
-    UpdateDebugStatus();
-  }
+  // Use the new singleton debug dialog
+  auto* dialog = MouseMuxDebugDialog::GetInstance();
+  dialog->SetClient(this);
+  dialog->Show();
+  mDebugDialogVisible = true;
 }
 
 void MouseMuxClient::HideDebugDialog() {
-  if (mDebugDialog && ::IsWindow(mDebugDialog)) {
-    ::ShowWindow(mDebugDialog, SW_HIDE);
-  }
+  auto* dialog = MouseMuxDebugDialog::GetInstance();
+  dialog->Hide();
   mDebugDialogVisible = false;
 }
 

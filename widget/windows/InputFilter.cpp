@@ -99,6 +99,7 @@ bool InputFilter::IsKeyboardMessage(UINT msg) {
 
 bool InputFilter::IsMouseMessage(UINT msg) {
   switch (msg) {
+    // Client area mouse messages - these should be blocked
     case WM_MOUSEMOVE:
     case WM_LBUTTONDOWN:
     case WM_LBUTTONUP:
@@ -114,17 +115,9 @@ bool InputFilter::IsMouseMessage(UINT msg) {
     case WM_XBUTTONDBLCLK:
     case WM_MOUSEWHEEL:
     case WM_MOUSEHWHEEL:
-    case WM_NCMOUSEMOVE:
-    case WM_NCLBUTTONDOWN:
-    case WM_NCLBUTTONUP:
-    case WM_NCLBUTTONDBLCLK:
-    case WM_NCRBUTTONDOWN:
-    case WM_NCRBUTTONUP:
-    case WM_NCRBUTTONDBLCLK:
-    case WM_NCMBUTTONDOWN:
-    case WM_NCMBUTTONUP:
-    case WM_NCMBUTTONDBLCLK:
       return true;
+    // Non-client area mouse messages are NOT included here
+    // They allow: title bar dragging, resize borders, min/max/close buttons
     default:
       return false;
   }

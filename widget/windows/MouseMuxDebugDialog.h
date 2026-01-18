@@ -14,6 +14,8 @@
 namespace mozilla {
 namespace widget {
 
+class MouseMuxClient;
+
 class MouseMuxDebugDialog {
  public:
   static MouseMuxDebugDialog* GetInstance();
@@ -23,6 +25,16 @@ class MouseMuxDebugDialog {
   void Hide();
   bool IsVisible() const { return mVisible; }
 
+  // Called by MouseMuxClient when mouse hovers over this dialog
+  void SetHoveringUser(uint32_t mouseHwid, uint32_t userId);
+  void ClearHoveringUser();
+
+  // Set the client to use for connection/status
+  void SetClient(MouseMuxClient* client);
+
+  // Get dialog HWND (for hover detection)
+  HWND GetDialogHwnd() const { return mDialog; }
+
  private:
   MouseMuxDebugDialog();
   ~MouseMuxDebugDialog();
@@ -31,25 +43,55 @@ class MouseMuxDebugDialog {
   static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
   LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
 
-  void OnToggleConnect();
-  void OnToggleBlock();
+  void OnClaimWindow();
   void UpdateStatus();
   void Log(const char* aFormat, ...);
   void AppendLog(const char* text);
+  std::wstring GetExeDirectory();
+  void SyncPositionToFirefox();
+  void StartTrackingFirefox();
+  void StopTrackingFirefox();
+  static LRESULT CALLBACK FirefoxSubclassProc(HWND hwnd, UINT msg, WPARAM wParam,
+                                               LPARAM lParam, UINT_PTR idSubclass,
+                                               DWORD_PTR refData);
 
   static MouseMuxDebugDialog* sInstance;
+  MouseMuxClient* mClient = nullptr;
+  HWND mFirefoxHwnd = nullptr;       // Firefox window we're docked to
 
   HWND mDialog = nullptr;
-  HWND mStatusLabel = nullptr;
-  HWND mConnectBtn = nullptr;
-  HWND mBlockBtn = nullptr;
-  HWND mLogEdit = nullptr;
+  HWND mLogoStatic = nullptr;      // Logo icon
+  HWND mTitleLabel = nullptr;      // "MouseMux" title
+  HWND mStatusLabel = nullptr;     // Connection status
+  HWND mBlockedLabel = nullptr;    // Input blocking status
+  HWND mOwnerLabel = nullptr;      // Owner status
+  HWND mHoverLabel = nullptr;      // Shows hovering user
+  HWND mClaimBtn = nullptr;        // Connect button
+  HWND mLogEdit = nullptr;         // Log output
+  HWND mHideBtn = nullptr;         // Hide button
 
   bool mVisible = false;
+  bool mClaiming = false;          // True while connecting
+  bool mPendingBlock = false;      // True if we need to block after connect
+  uint64_t mConnectStartTime = 0;  // When connect was started (for timeout)
+  uint32_t mHoveringMouseHwid = 0;
+  uint32_t mHoveringUserId = 0;
+
   std::vector<std::string> mLogLines;
   std::mutex mLogMutex;
+  std::mutex mHoverMutex;
 
-  enum { ID_STATUS = 100, ID_CONNECT, ID_BLOCK, ID_LOG };
+  enum {
+    ID_LOGO = 100,
+    ID_TITLE,
+    ID_STATUS,
+    ID_BLOCKED,
+    ID_OWNER,
+    ID_HOVER,
+    ID_CLAIM,
+    ID_LOG,
+    ID_HIDE
+  };
 };
 
 }  // namespace widget

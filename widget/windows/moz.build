@@ -132,6 +132,8 @@ SOURCES += [
     "InputFilter.cpp",
     "MediaKeysEventSourceFactory.cpp",
     "MouseMuxClient.cpp",
+    "MouseMuxDebugDialog.cpp",
+    "MouseMuxService.cpp",
     "nsBidiKeyboard.cpp",
     "nsFilePicker.cpp",
     "nsSharePicker.cpp",
