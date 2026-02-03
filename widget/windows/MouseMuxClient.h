@@ -92,6 +92,12 @@ class MouseMuxClient {
   WPARAM BuildMouseWParam(uint32_t aHwid);
   POINT ScreenToClient(int aScreenX, int aScreenY);
 
+  // SDK v2.2.35 protocol
+  bool SendWebSocketMessage(const std::string& aMessage);
+  void SendLogin();
+  void SendLogout(const char* aReason);
+  void SendPong();
+
   // Owner window
   HWND mOwnerHwnd;
   std::atomic<uint32_t> mOwnerHwid{0};

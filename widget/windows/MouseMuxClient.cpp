@@ -14,8 +14,9 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define MOUSEMUX_CLIENT_VERSION "5.25"
-#define MOUSEMUX_BUILD_TIME __DATE__ " " __TIME__
+#define MOUSEMUX_CLIENT_VERSION "5.34"
+#define MOUSEMUX_SDK_VERSION "2.2.35"
+#define MOUSEMUX_BUILD_DATE __DATE__
 
 namespace mozilla {
 namespace widget {
@@ -105,7 +106,80 @@ bool MouseMuxClient::Connect(const wchar_t* aUrl) {
   return true;
 }
 
+bool MouseMuxClient::SendWebSocketMessage(const std::string& aMessage) {
+  std::lock_guard<std::mutex> lock(mSocketMutex);
+  if (mSocket == INVALID_SOCKET) return false;
+
+  size_t len = aMessage.length();
+  std::vector<unsigned char> frame;
+
+  frame.push_back(0x81);  // FIN + text opcode
+
+  // Mask bit must be set for client-to-server messages
+  if (len < 126) {
+    frame.push_back(0x80 | (unsigned char)len);
+  } else if (len < 65536) {
+    frame.push_back(0x80 | 126);
+    frame.push_back((len >> 8) & 0xFF);
+    frame.push_back(len & 0xFF);
+  } else {
+    frame.push_back(0x80 | 127);
+    for (int i = 7; i >= 0; i--) {
+      frame.push_back((len >> (i * 8)) & 0xFF);
+    }
+  }
+
+  // Mask key
+  unsigned char mask[4] = {0x12, 0x34, 0x56, 0x78};
+  frame.insert(frame.end(), mask, mask + 4);
+
+  // Masked payload
+  for (size_t i = 0; i < len; i++) {
+    frame.push_back(aMessage[i] ^ mask[i % 4]);
+  }
+
+  int sent = send(mSocket, (char*)frame.data(), (int)frame.size(), 0);
+  return sent == (int)frame.size();
+}
+
+void MouseMuxClient::SendLogin() {
+  char msg[512];
+  snprintf(msg, sizeof(msg),
+    "{\"type\":\"client.login.request.A2M\","
+    "\"appName\":\"Firefox MouseMux\","
+    "\"appVersion\":\"%s\","
+    "\"appBuildDate\":\"%s\","
+    "\"sdkVersion\":\"%s\","
+    "\"sdkBuildDate\":\"%s\"}",
+    MOUSEMUX_CLIENT_VERSION, MOUSEMUX_BUILD_DATE,
+    MOUSEMUX_SDK_VERSION, MOUSEMUX_BUILD_DATE);
+  SendWebSocketMessage(msg);
+  Log("Sent login message");
+}
+
+void MouseMuxClient::SendLogout(const char* aReason) {
+  char msg[512];
+  snprintf(msg, sizeof(msg),
+    "{\"type\":\"client.logout.request.A2M\","
+    "\"appName\":\"Firefox MouseMux\","
+    "\"appVersion\":\"%s\","
+    "\"sdkVersion\":\"%s\","
+    "\"reason\":\"%s\"}",
+    MOUSEMUX_CLIENT_VERSION, MOUSEMUX_SDK_VERSION, aReason);
+  SendWebSocketMessage(msg);
+  Log("Sent logout: %s", aReason);
+}
+
+void MouseMuxClient::SendPong() {
+  SendWebSocketMessage("{\"type\":\"client.pong.request.A2M\"}");
+}
+
 void MouseMuxClient::Disconnect() {
+  // Send logout before disconnecting
+  if (mConnected.load()) {
+    SendLogout("user");
+  }
+
   mShouldStop.store(true);
   mConnected.store(false);
 
@@ -244,22 +318,12 @@ void MouseMuxClient::WebSocketThread() {
   Log("Connected to MouseMux server at %s:%d", hostA, port);
   UpdateDebugStatusSafe();
 
+  // Send login message (SDK v2.2.35 protocol)
+  SendLogin();
+
   // Request user list for keyboard-to-mouse mapping
-  {
-    const char* userListReq = "{\"type\":\"user.list.request.A2M\"}";
-    size_t len = strlen(userListReq);
-    // Build WebSocket frame: FIN=1, opcode=1 (text), masked
-    unsigned char frame[256];
-    frame[0] = 0x81;  // FIN + text opcode
-    frame[1] = 0x80 | (unsigned char)len;  // Mask bit + length
-    // Simple mask (could be random, but server doesn't care)
-    frame[2] = 0x12; frame[3] = 0x34; frame[4] = 0x56; frame[5] = 0x78;
-    for (size_t i = 0; i < len; i++) {
-      frame[6 + i] = userListReq[i] ^ frame[2 + (i % 4)];
-    }
-    send(sock, (char*)frame, (int)(6 + len), 0);
-    Log("Requested user list from server");
-  }
+  SendWebSocketMessage("{\"type\":\"user.list.request.A2M\"}");
+  Log("Requested user list from server");
 
   DWORD timeout = 100;
   setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
@@ -414,6 +478,13 @@ void MouseMuxClient::HandleMessage(const std::string& aMessage) {
       mMouseToKeyboard.erase(mouseHwid);
       Log("User disposed: mouse 0x%X", mouseHwid);
     }
+
+  } else if (type == "server.ping.notify.M2A") {
+    SendPong();
+
+  } else if (type == "server.shutdown.notify.M2A") {
+    Log("Server shutting down");
+    mShouldStop.store(true);
   }
 }
 

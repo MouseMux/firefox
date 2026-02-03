@@ -4,7 +4,7 @@ Firefox build with MouseMux SDK integration for per-user window ownership.
 
 ## Version
 
-- **MouseMux Integration**: v5.33
+- **MouseMux Integration**: v5.34
 - **Firefox Base**: 148.0a1 (Nightly)
 - **Platform**: Windows x64
 

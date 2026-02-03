@@ -18,6 +18,10 @@
 // Marker in wParam high bit to identify MouseMux-injected messages
 #define MOUSEMUX_MARKER 0x80000000
 
+#define MOUSEMUX_VERSION "5.34"
+#define MOUSEMUX_SDK_VERSION "2.2.35"
+#define MOUSEMUX_BUILD_DATE __DATE__
+
 namespace mozilla {
 namespace widget {
 
@@ -106,10 +110,83 @@ bool MouseMuxService::Connect(const wchar_t* aUrl) {
   return true;
 }
 
+bool MouseMuxService::SendWebSocketMessage(const std::string& aMessage) {
+  if (mSocket == INVALID_SOCKET) return false;
+
+  size_t len = aMessage.length();
+  std::vector<unsigned char> frame;
+
+  frame.push_back(0x81);  // FIN + text opcode
+
+  // Mask bit must be set for client-to-server messages
+  if (len < 126) {
+    frame.push_back(0x80 | (unsigned char)len);
+  } else if (len < 65536) {
+    frame.push_back(0x80 | 126);
+    frame.push_back((len >> 8) & 0xFF);
+    frame.push_back(len & 0xFF);
+  } else {
+    frame.push_back(0x80 | 127);
+    for (int i = 7; i >= 0; i--) {
+      frame.push_back((len >> (i * 8)) & 0xFF);
+    }
+  }
+
+  // Mask key (simple static mask)
+  unsigned char mask[4] = {0x12, 0x34, 0x56, 0x78};
+  frame.insert(frame.end(), mask, mask + 4);
+
+  // Masked payload
+  for (size_t i = 0; i < len; i++) {
+    frame.push_back(aMessage[i] ^ mask[i % 4]);
+  }
+
+  int sent = send(mSocket, (char*)frame.data(), (int)frame.size(), 0);
+  return sent == (int)frame.size();
+}
+
+void MouseMuxService::SendLogin() {
+  char msg[512];
+  snprintf(msg, sizeof(msg),
+    "{\"type\":\"client.login.request.A2M\","
+    "\"appName\":\"Firefox MouseMux\","
+    "\"appVersion\":\"%s\","
+    "\"appBuildDate\":\"%s\","
+    "\"sdkVersion\":\"%s\","
+    "\"sdkBuildDate\":\"%s\"}",
+    MOUSEMUX_VERSION, MOUSEMUX_BUILD_DATE,
+    MOUSEMUX_SDK_VERSION, MOUSEMUX_BUILD_DATE);
+  SendWebSocketMessage(msg);
+  Log("Sent login message");
+}
+
+void MouseMuxService::SendLogout(const char* aReason) {
+  char msg[512];
+  snprintf(msg, sizeof(msg),
+    "{\"type\":\"client.logout.request.A2M\","
+    "\"appName\":\"Firefox MouseMux\","
+    "\"appVersion\":\"%s\","
+    "\"sdkVersion\":\"%s\","
+    "\"reason\":\"%s\"}",
+    MOUSEMUX_VERSION, MOUSEMUX_SDK_VERSION, aReason);
+  SendWebSocketMessage(msg);
+  Log("Sent logout message: %s", aReason);
+}
+
+void MouseMuxService::SendPong() {
+  SendWebSocketMessage("{\"type\":\"client.pong.request.A2M\"}");
+}
+
 void MouseMuxService::Disconnect() {
   if (mConnectionState == ConnectionState::Disconnected) return;
 
   Log("Disconnecting...");
+
+  // Send logout before closing
+  if (mSocket != INVALID_SOCKET && mConnectionState == ConnectionState::Connected) {
+    SendLogout("user");
+  }
+
   mShouldStop = true;
 
   if (mSocket != INVALID_SOCKET) {
@@ -181,6 +258,9 @@ void MouseMuxService::WebSocketThread() {
 
   Log("WS connected!");
   mConnectionState = ConnectionState::Connected;
+
+  // Send login message
+  SendLogin();
 
   std::string messageBuffer;
 
@@ -308,6 +388,13 @@ void MouseMuxService::HandleMessage(const std::string& aMessage) {
 
   } else if (type == "user.list.notify.M2A") {
     HandleUserList(aMessage);
+
+  } else if (type == "server.ping.notify.M2A") {
+    SendPong();
+
+  } else if (type == "server.shutdown.notify.M2A") {
+    Log("Server shutting down");
+    mShouldStop = true;
   }
 }
 
@@ -343,7 +430,7 @@ void MouseMuxService::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScr
 
 void MouseMuxService::HandlePointerButton(uint32_t aHwid, int aScreenX,
                                           int aScreenY, uint32_t aEventFlags) {
-  // SDK v2.2.32 event flags:
+  // SDK v2.2.35 event flags:
   // 0x01=LeftDown, 0x02=LeftUp, 0x04=RightDown, 0x08=RightUp,
   // 0x10=MiddleDown, 0x20=MiddleUp
 
@@ -554,9 +641,6 @@ void MouseMuxService::SetLogCallback(LogCallback aCallback) {
   std::lock_guard<std::mutex> lock(mLogMutex);
   mLogCallback = aCallback;
 }
-
-// Version for tracking builds
-#define MOUSEMUX_VERSION "3.0"
 
 void MouseMuxService::Log(const char* aFormat, ...) {
   char buf[512];

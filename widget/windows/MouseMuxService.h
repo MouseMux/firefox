@@ -88,6 +88,11 @@ class MouseMuxService {
   WPARAM BuildMouseWParam(uint32_t aHwid);
   void Log(const char* aFormat, ...);
 
+  bool SendWebSocketMessage(const std::string& aMessage);
+  void SendLogin();
+  void SendLogout(const char* aReason);
+  void SendPong();
+
   static MouseMuxService* sInstance;
 
   std::atomic<ConnectionState> mConnectionState{ConnectionState::Disconnected};
