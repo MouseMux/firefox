@@ -358,24 +358,20 @@ void MouseMuxService::HandleMessage(const std::string& aMessage) {
     if (!ExtractUint(aMessage, "hwid", hwid)) return;
     if (!ExtractInt(aMessage, "x", x)) return;
     if (!ExtractInt(aMessage, "y", y)) return;
-    if (!ExtractUint(aMessage, "data", data)) return;
+    if (!ExtractUint(aMessage, "button", data)) return;
 
     mLastMousePos[hwid] = {x, y};
     HandlePointerButton(hwid, x, y, data);
 
-  } else if (type == "pointer.wheel.v.notify.M2A") {
+  } else if (type == "pointer.wheel.notify.M2A") {
     if (!ExtractUint(aMessage, "hwid", hwid)) return;
+    if (!ExtractInt(aMessage, "x", x)) return;
+    if (!ExtractInt(aMessage, "y", y)) return;
     int delta;
     if (!ExtractInt(aMessage, "delta", delta)) return;
-    auto& pos = mLastMousePos[hwid];
-    HandlePointerWheel(hwid, pos.screenX, pos.screenY, delta, false);
-
-  } else if (type == "pointer.wheel.h.notify.M2A") {
-    if (!ExtractUint(aMessage, "hwid", hwid)) return;
-    int delta;
-    if (!ExtractInt(aMessage, "delta", delta)) return;
-    auto& pos = mLastMousePos[hwid];
-    HandlePointerWheel(hwid, pos.screenX, pos.screenY, delta, true);
+    bool horiz = aMessage.find("\"horizontal\":true") != std::string::npos;
+    mLastMousePos[hwid] = {x, y};
+    HandlePointerWheel(hwid, x, y, delta, horiz);
 
   } else if (type == "keyboard.key.notify.M2A") {
     if (!ExtractUint(aMessage, "hwid", hwid)) return;

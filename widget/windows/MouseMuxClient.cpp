@@ -452,8 +452,8 @@ void MouseMuxClient::HandleMessage(const std::string& aMessage) {
   if (type == "pointer.motion.notify.M2A") {
     HandlePointerMotion(getUint("hwid"), getInt("x"), getInt("y"));
   } else if (type == "pointer.button.notify.M2A") {
-    HandlePointerButton(getUint("hwid"), getInt("x"), getInt("y"), getUint("data"));
-  } else if (type == "pointer.scroll.notify.M2A") {
+    HandlePointerButton(getUint("hwid"), getInt("x"), getInt("y"), getUint("button"));
+  } else if (type == "pointer.wheel.notify.M2A") {
     bool horiz = aMessage.find("\"horizontal\":true") != std::string::npos;
     HandlePointerWheel(getUint("hwid"), getInt("x"), getInt("y"), getInt("delta"), horiz);
   } else if (type == "keyboard.key.notify.M2A") {
