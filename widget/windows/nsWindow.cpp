@@ -140,6 +140,7 @@
 #include "nsIWidgetListener.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/MouseEventBinding.h"
+#include "mozilla/dom/WheelEventBinding.h"
 #include "mozilla/dom/Touch.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/GPUProcessManager.h"
@@ -194,6 +195,7 @@
 #include "WindowsUIUtils.h"
 
 #include "InputFilter.h"
+#include "MouseMuxClient.h"
 
 #include "nsWindowDefs.h"
 
@@ -4387,8 +4389,43 @@ bool nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
       }
     }
 
+    // MouseMux diagnostic: log event details before dispatch
+    if (InputFilter::IsEnabledForWindow(mWnd) &&
+        (aEventMessage == eMouseDown || aEventMessage == eMouseUp)) {
+      FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
+      if (f) {
+        fprintf(f, "[DispatchMouseEvent] msg=%s btn=%d pos=(%d,%d) "
+                "clickCount=%ld mButtons=0x%X mModifiers=0x%X "
+                "convertToPointer=%d pointerId=%u capture=%d\n",
+                aEventMessage == eMouseDown ? "DOWN" : "UP",
+                (int)mouseOrPointerEvent.mButton,
+                mouseOrPointerEvent.mRefPoint.x.value,
+                mouseOrPointerEvent.mRefPoint.y.value,
+                mouseOrPointerEvent.mClickCount,
+                (unsigned)mouseOrPointerEvent.mButtons,
+                (unsigned)mouseOrPointerEvent.mModifiers,
+                (int)mouseOrPointerEvent.convertToPointer,
+                mouseOrPointerEvent.pointerId,
+                (int)sIsInMouseCapture);
+        fclose(f);
+      }
+    }
+
     nsIWidget::ContentAndAPZEventStatus eventStatus =
         DispatchInputEvent(&mouseOrPointerEvent);
+
+    // MouseMux diagnostic: log dispatch result
+    if (InputFilter::IsEnabledForWindow(mWnd) &&
+        (aEventMessage == eMouseDown || aEventMessage == eMouseUp)) {
+      FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
+      if (f) {
+        fprintf(f, "[DispatchMouseEvent] result: content=%d apz=%d\n",
+                (int)eventStatus.mContentStatus,
+                (int)eventStatus.mApzStatus);
+        fclose(f);
+      }
+    }
+
     contextMenuPreventer.Update(mouseOrPointerEvent, eventStatus);
     return ConvertStatus(eventStatus.mContentStatus);
   }
@@ -4801,10 +4838,43 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
   AppShutdownReason shutdownReason = AppShutdownReason::Unknown;
 
   // MouseMux: Skip native input when blocking is enabled
-  // Allow MouseMux injected messages (marked with MOUSEMUX_MARKER in wParam)
   if (InputFilter::IsEnabledForWindow(mWnd)) {
     switch (msg) {
-      // Mouse events with CLIENT coordinates
+#if MOUSEMUX_INPUT_METHOD == MOUSEMUX_INPUT_GECKO
+      // Gecko method: block ALL native mouse messages unconditionally.
+      // MouseMux sends WM_MOUSEMUX_* custom messages instead.
+      case WM_MOUSEMOVE:
+      case WM_LBUTTONDOWN:
+      case WM_LBUTTONUP:
+      case WM_LBUTTONDBLCLK:
+      case WM_RBUTTONDOWN:
+      case WM_RBUTTONUP:
+      case WM_RBUTTONDBLCLK:
+      case WM_MBUTTONDOWN:
+      case WM_MBUTTONUP:
+      case WM_MBUTTONDBLCLK:
+      case WM_XBUTTONDOWN:
+      case WM_XBUTTONUP:
+      case WM_XBUTTONDBLCLK:
+      case WM_MOUSEWHEEL:
+      case WM_MOUSEHWHEEL:
+      case WM_NCMOUSEMOVE:
+      case WM_MOUSELEAVE:
+      case WM_NCMOUSELEAVE:
+        return true;
+      // WM_MOUSEMUX_MOTION/BUTTON/WHEEL: store cursor pos then fall through
+      case WM_MOUSEMUX_MOTION:
+      case WM_MOUSEMUX_BUTTON:
+      case WM_MOUSEMUX_WHEEL: {
+        POINT pt;
+        pt.x = GET_X_LPARAM(lParam);
+        pt.y = GET_Y_LPARAM(lParam);
+        ::ClientToScreen(mWnd, &pt);
+        InputFilter::SetCursorPosForWindow(mWnd, pt.x, pt.y);
+        break;
+      }
+#else
+      // PostMessage method: allow marked messages, block native
       case WM_MOUSEMOVE:
       case WM_LBUTTONDOWN:
       case WM_LBUTTONUP:
@@ -4819,10 +4889,9 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
       case WM_XBUTTONUP:
       case WM_XBUTTONDBLCLK: {
         if (!(wParam & MOUSEMUX_MARKER)) {
-          return true;  // Block native mouse
+          return true;
         }
-        wParam &= ~MOUSEMUX_MARKER;  // Strip marker
-        // Store cursor position (convert client -> screen)
+        wParam &= ~MOUSEMUX_MARKER;
         {
           POINT pt;
           pt.x = GET_X_LPARAM(lParam);
@@ -4832,15 +4901,13 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
         }
         break;
       }
-      // Mouse events with SCREEN coordinates
       case WM_MOUSEWHEEL:
       case WM_MOUSEHWHEEL:
       case WM_NCMOUSEMOVE: {
         if (!(wParam & MOUSEMUX_MARKER)) {
-          return true;  // Block native mouse
+          return true;
         }
-        wParam &= ~MOUSEMUX_MARKER;  // Strip marker
-        // Store cursor position (already screen coords)
+        wParam &= ~MOUSEMUX_MARKER;
         {
           POINT pt;
           pt.x = GET_X_LPARAM(lParam);
@@ -4849,53 +4916,29 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
         }
         break;
       }
-      // Leave events have no meaningful coordinates
       case WM_MOUSELEAVE:
       case WM_NCMOUSELEAVE: {
         if (!(wParam & MOUSEMUX_MARKER)) {
-          return true;  // Block native mouse
+          return true;
         }
-        wParam &= ~MOUSEMUX_MARKER;  // Strip marker
-        // Don't update cursor pos - leave events have no coords
+        wParam &= ~MOUSEMUX_MARKER;
         break;
       }
-      // Keyboard events
+#endif
+      // Keyboard events (same for both methods)
       case WM_KEYDOWN:
       case WM_KEYUP:
       case WM_SYSKEYDOWN:
       case WM_SYSKEYUP:
       case WM_CHAR:
       case WM_SYSCHAR: {
-        // Allow F12 through for emergency exit
         if ((wParam & 0xFF) == VK_F12) {
           break;
         }
         if (!(wParam & MOUSEMUX_MARKER)) {
-          // Log blocked native keyboard
-          static int blockCount = 0;
-          if (++blockCount % 10 == 1) {
-            FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
-            if (f) {
-              fprintf(f, "[nsWindow] BLOCKED native keyboard: msg=0x%X wParam=0x%llX HWND=%p (count=%d)\n",
-                      msg, (unsigned long long)wParam, mWnd, blockCount);
-              fclose(f);
-            }
-          }
-          return true;  // Block native keyboard
+          return true;
         }
-        // Log accepted MouseMux keyboard
-        {
-          static int acceptCount = 0;
-          if (++acceptCount % 10 == 1) {
-            FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
-            if (f) {
-              fprintf(f, "[nsWindow] ACCEPTED MouseMux keyboard: msg=0x%X wParam=0x%llX HWND=%p (count=%d)\n",
-                      msg, (unsigned long long)wParam, mWnd, acceptCount);
-              fclose(f);
-            }
-          }
-        }
-        wParam &= ~MOUSEMUX_MARKER;  // Strip marker
+        wParam &= ~MOUSEMUX_MARKER;
         break;
       }
     }
@@ -5280,6 +5323,107 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
       *aRetValue = 1;
       result = true;
     } break;
+
+#if MOUSEMUX_INPUT_METHOD == MOUSEMUX_INPUT_GECKO
+    case WM_MOUSEMUX_MOTION: {
+      static int sMmuxMotionLog = 0;
+      if (++sMmuxMotionLog <= 5) {
+        FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
+        if (f) {
+          fprintf(f, "[nsWindow] WM_MOUSEMUX_MOTION: pos=(%d,%d) "
+                  "wParam=0x%llX mWidgetListener=%p\n",
+                  GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
+                  (unsigned long long)wParam, mWidgetListener);
+          fclose(f);
+        }
+      }
+      result = DispatchMouseEvent(eMouseMove, wParam, lParam, false,
+                                  MouseButton::ePrimary,
+                                  MouseEvent_Binding::MOZ_SOURCE_MOUSE);
+      DispatchPendingEvents();
+    } break;
+
+    case WM_MOUSEMUX_BUTTON: {
+      uint16_t btnState = LOWORD(wParam);
+      uint16_t eventFlags = HIWORD(wParam);
+      WPARAM dispatchWP = btnState;
+      // Set button state on UI thread so GetCurrentMouseButtons is in sync
+      InputFilter::SetMouseButtonState(mWnd,
+          (btnState & MK_LBUTTON) != 0,
+          (btnState & MK_RBUTTON) != 0,
+          (btnState & MK_MBUTTON) != 0);
+      {
+        FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
+        if (f) {
+          fprintf(f, "[nsWindow] WM_MOUSEMUX_BUTTON: flags=0x%X btnState=0x%X "
+                  "pos=(%d,%d) HWND=%p mWidgetListener=%p capture=%d\n",
+                  eventFlags, btnState,
+                  GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
+                  mWnd, mWidgetListener, (int)sIsInMouseCapture);
+          fclose(f);
+        }
+      }
+      if (eventFlags & 0x01) {
+        bool r = DispatchMouseEvent(eMouseDown, dispatchWP, lParam, false,
+                           MouseButton::ePrimary,
+                           MouseEvent_Binding::MOZ_SOURCE_MOUSE);
+        FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
+        if (f) {
+          fprintf(f, "[nsWindow]   eMouseDown(primary) result=%d\n", r);
+          fclose(f);
+        }
+      }
+      if (eventFlags & 0x02) {
+        bool r = DispatchMouseEvent(eMouseUp, dispatchWP, lParam, false,
+                           MouseButton::ePrimary,
+                           MouseEvent_Binding::MOZ_SOURCE_MOUSE);
+        FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
+        if (f) {
+          fprintf(f, "[nsWindow]   eMouseUp(primary) result=%d\n", r);
+          fclose(f);
+        }
+      }
+      if (eventFlags & 0x04)
+        DispatchMouseEvent(eMouseDown, dispatchWP, lParam, false,
+                           MouseButton::eSecondary,
+                           MouseEvent_Binding::MOZ_SOURCE_MOUSE);
+      if (eventFlags & 0x08)
+        DispatchMouseEvent(eMouseUp, dispatchWP, lParam, false,
+                           MouseButton::eSecondary,
+                           MouseEvent_Binding::MOZ_SOURCE_MOUSE);
+      if (eventFlags & 0x10)
+        DispatchMouseEvent(eMouseDown, dispatchWP, lParam, false,
+                           MouseButton::eMiddle,
+                           MouseEvent_Binding::MOZ_SOURCE_MOUSE);
+      if (eventFlags & 0x20)
+        DispatchMouseEvent(eMouseUp, dispatchWP, lParam, false,
+                           MouseButton::eMiddle,
+                           MouseEvent_Binding::MOZ_SOURCE_MOUSE);
+      DispatchPendingEvents();
+      result = true;
+    } break;
+
+    case WM_MOUSEMUX_WHEEL: {
+      uint16_t flags = LOWORD(wParam);
+      int16_t delta = (int16_t)HIWORD(wParam);
+      bool horizontal = (flags & 0x4000) != 0;
+      WidgetWheelEvent wheelEvent(true, eWheel, this);
+      LayoutDeviceIntPoint point(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+      InitEvent(wheelEvent, &point);
+      if (horizontal) {
+        wheelEvent.mDeltaX = (double)-delta / WHEEL_DELTA;
+        wheelEvent.mLineOrPageDeltaX = delta > 0 ? -1 : 1;
+      } else {
+        wheelEvent.mDeltaY = (double)-delta / WHEEL_DELTA;
+        wheelEvent.mLineOrPageDeltaY = delta > 0 ? -1 : 1;
+      }
+      wheelEvent.mDeltaMode = WheelEvent_Binding::DOM_DELTA_LINE;
+      ModifierKeyState modKeyState;
+      modKeyState.InitInputEvent(wheelEvent);
+      DispatchInputEvent(&wheelEvent);
+      result = true;
+    } break;
+#endif
 
     case WM_MOUSEMOVE: {
       LPARAM lParamScreen = lParamToScreen(lParam);

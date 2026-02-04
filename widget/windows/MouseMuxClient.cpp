@@ -402,6 +402,30 @@ void MouseMuxClient::WebSocketThread() {
       break;
     }
 
+    if (opcode == 0x09) {
+      // WebSocket ping - respond with pong (opcode 0x0A) echoing payload
+      std::vector<unsigned char> pongFrame;
+      pongFrame.push_back(0x80 | 0x0A);  // FIN + pong opcode
+      size_t pLen = payload.size();
+      if (pLen < 126) {
+        pongFrame.push_back(0x80 | (unsigned char)pLen);
+      } else if (pLen < 65536) {
+        pongFrame.push_back(0x80 | 126);
+        pongFrame.push_back((pLen >> 8) & 0xFF);
+        pongFrame.push_back(pLen & 0xFF);
+      }
+      unsigned char pongMask[4] = {0x12, 0x34, 0x56, 0x78};
+      pongFrame.insert(pongFrame.end(), pongMask, pongMask + 4);
+      for (size_t i = 0; i < pLen; i++) {
+        pongFrame.push_back(payload[i] ^ pongMask[i % 4]);
+      }
+      std::lock_guard<std::mutex> lock(mSocketMutex);
+      if (mSocket != INVALID_SOCKET) {
+        send(mSocket, (char*)pongFrame.data(), (int)pongFrame.size(), 0);
+      }
+      continue;
+    }
+
     if (opcode == 0x01 || opcode == 0x02) {
       messageBuffer += payload;
       if (fin) {
@@ -461,26 +485,45 @@ void MouseMuxClient::HandleMessage(const std::string& aMessage) {
                    getUint("scan"), getUint("flags"));
   } else if (type == "user.list.notify.M2A") {
     ParseUserList(aMessage);
-  } else if (type == "user.changed.notify.M2A") {
-    // Handle incremental user updates (has hwid_ms and hwid_kb directly)
-    uint32_t mouseHwid = getUint("hwid_ms");
-    uint32_t keyboardHwid = getUint("hwid_kb");
-    std::string action = getString("action");
-
-    if (action == "create" || action == "map") {
-      if (mouseHwid && keyboardHwid) {
-        std::lock_guard<std::mutex> lock(mMappingMutex);
-        mMouseToKeyboard[mouseHwid] = keyboardHwid;
-        Log("User %s: mouse 0x%X -> keyboard 0x%X", action.c_str(), mouseHwid, keyboardHwid);
-      }
-    } else if (action == "dispose") {
-      std::lock_guard<std::mutex> lock(mMappingMutex);
-      mMouseToKeyboard.erase(mouseHwid);
-      Log("User disposed: mouse 0x%X", mouseHwid);
-    }
+  } else if (type == "user.changed.notify.M2A" ||
+             type == "user.create.notify.M2A" ||
+             type == "user.dispose.notify.M2A") {
+    Log("User change (%s), refreshing user list", type.c_str());
+    SendWebSocketMessage("{\"type\":\"user.list.request.A2M\"}");
 
   } else if (type == "server.ping.notify.M2A") {
     SendPong();
+
+  } else if (type == "server.timeout.warning.notify.M2A") {
+    int minutes = getInt("minutes");
+    Log("Server timeout warning: %d minutes remaining", minutes);
+    wchar_t msg[256];
+    swprintf(msg, 256, L"MouseMux server will shut down in %d minute%s.",
+             minutes, minutes == 1 ? L"" : L"s");
+    std::wstring msgStr(msg);
+    std::thread([msgStr]() {
+      ::MessageBoxW(nullptr, msgStr.c_str(), L"MouseMux Timeout Warning",
+                    MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+    }).detach();
+
+  } else if (type == "server.timeout.stopped.notify.M2A") {
+    std::string reason = getString("reason");
+    Log("Server timeout stopped: %s", reason.empty() ? "(no reason)" : reason.c_str());
+    wchar_t msg[256];
+    if (!reason.empty()) {
+      wchar_t reasonW[128];
+      mbstowcs(reasonW, reason.c_str(), 127);
+      reasonW[127] = L'\0';
+      swprintf(msg, 256, L"MouseMux server has timed out: %s", reasonW);
+    } else {
+      swprintf(msg, 256, L"MouseMux server has timed out.");
+    }
+    std::wstring msgStr(msg);
+    std::thread([msgStr]() {
+      ::MessageBoxW(nullptr, msgStr.c_str(), L"MouseMux Timeout",
+                    MB_OK | MB_ICONERROR | MB_SYSTEMMODAL);
+    }).detach();
+    mShouldStop.store(true);
 
   } else if (type == "server.shutdown.notify.M2A") {
     Log("Server shutting down");
@@ -669,9 +712,24 @@ void MouseMuxClient::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScre
 
   POINT clientPt = ScreenToClient(aScreenX, aScreenY);
   LPARAM lParam = MAKELPARAM(clientPt.x, clientPt.y);
-  WPARAM wParam = BuildMouseWParam(aHwid);
 
+#if MOUSEMUX_INPUT_METHOD == MOUSEMUX_INPUT_GECKO
+  WPARAM wp = 0;
+  {
+    std::lock_guard<std::mutex> lock(mButtonStateMutex);
+    auto it = mButtonState.find(aHwid);
+    if (it != mButtonState.end()) {
+      uint32_t state = it->second;
+      if (state & 0x01) wp |= MK_LBUTTON;
+      if (state & 0x04) wp |= MK_RBUTTON;
+      if (state & 0x10) wp |= MK_MBUTTON;
+    }
+  }
+  ::PostMessage(mOwnerHwnd, WM_MOUSEMUX_MOTION, wp, lParam);
+#else
+  WPARAM wParam = BuildMouseWParam(aHwid);
   ::PostMessage(mOwnerHwnd, WM_MOUSEMOVE, wParam, lParam);
+#endif
 }
 
 void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScreenY,
@@ -680,6 +738,8 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
     std::lock_guard<std::mutex> lock(mMousePosMutex);
     mLastMousePos[aHwid] = {aScreenX, aScreenY};
   }
+
+  Log("BUTTON hwid=0x%X flags=0x%X at (%d,%d)", aHwid, aEventFlags, aScreenX, aScreenY);
 
   bool leftDown = (aEventFlags & 0x01) != 0;
   bool leftUp = (aEventFlags & 0x02) != 0;
@@ -734,25 +794,46 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
     }
   }
 
-  // Sync button state to InputFilter for this window
+  POINT clientPt = ScreenToClient(aScreenX, aScreenY);
+  LPARAM lParam = MAKELPARAM(clientPt.x, clientPt.y);
+
+#if MOUSEMUX_INPUT_METHOD == MOUSEMUX_INPUT_GECKO
+  // Button state is synced on the UI thread (nsWindow) for the GECKO path
+  // to avoid race between worker PostMessage and UI-thread state reads.
+  uint16_t btnStateMK = 0;
+  if (currentState & 0x01) btnStateMK |= MK_LBUTTON;
+  if (currentState & 0x04) btnStateMK |= MK_RBUTTON;
+  if (currentState & 0x10) btnStateMK |= MK_MBUTTON;
+  WPARAM wp = MAKEWPARAM(btnStateMK, aEventFlags);
+  ::PostMessage(mOwnerHwnd, WM_MOUSEMUX_BUTTON, wp, lParam);
+#else
+  // Sync button state to InputFilter on worker thread for POSTMSG path
   bool leftHeld = (currentState & 0x01) != 0;
   bool rightHeld = (currentState & 0x04) != 0;
   bool middleHeld = (currentState & 0x10) != 0;
   InputFilter::SetMouseButtonState(mOwnerHwnd, leftHeld, rightHeld, middleHeld);
 
-  POINT clientPt = ScreenToClient(aScreenX, aScreenY);
-  LPARAM lParam = MAKELPARAM(clientPt.x, clientPt.y);
   WPARAM wParam = BuildMouseWParam(aHwid);
 
   if (leftDown) {
     Log("LBUTTONDOWN hwid=0x%X at (%d,%d)", aHwid, aScreenX, aScreenY);
     ::PostMessage(mOwnerHwnd, WM_LBUTTONDOWN, wParam, lParam);
   }
-  if (leftUp) ::PostMessage(mOwnerHwnd, WM_LBUTTONUP, wParam, lParam);
-  if (rightDown) ::PostMessage(mOwnerHwnd, WM_RBUTTONDOWN, wParam, lParam);
-  if (rightUp) ::PostMessage(mOwnerHwnd, WM_RBUTTONUP, wParam, lParam);
+  if (leftUp) {
+    Log("LBUTTONUP hwid=0x%X at (%d,%d)", aHwid, aScreenX, aScreenY);
+    ::PostMessage(mOwnerHwnd, WM_LBUTTONUP, wParam, lParam);
+  }
+  if (rightDown) {
+    Log("RBUTTONDOWN hwid=0x%X at (%d,%d)", aHwid, aScreenX, aScreenY);
+    ::PostMessage(mOwnerHwnd, WM_RBUTTONDOWN, wParam, lParam);
+  }
+  if (rightUp) {
+    Log("RBUTTONUP hwid=0x%X at (%d,%d)", aHwid, aScreenX, aScreenY);
+    ::PostMessage(mOwnerHwnd, WM_RBUTTONUP, wParam, lParam);
+  }
   if (middleDown) ::PostMessage(mOwnerHwnd, WM_MBUTTONDOWN, wParam, lParam);
   if (middleUp) ::PostMessage(mOwnerHwnd, WM_MBUTTONUP, wParam, lParam);
+#endif
 }
 
 void MouseMuxClient::HandlePointerWheel(uint32_t aHwid, int aScreenX, int aScreenY,
@@ -766,11 +847,28 @@ void MouseMuxClient::HandlePointerWheel(uint32_t aHwid, int aScreenX, int aScree
 
   POINT clientPt = ScreenToClient(aScreenX, aScreenY);
   LPARAM lParam = MAKELPARAM(clientPt.x, clientPt.y);
+
+#if MOUSEMUX_INPUT_METHOD == MOUSEMUX_INPUT_GECKO
+  uint16_t btnState = 0;
+  {
+    std::lock_guard<std::mutex> lock(mButtonStateMutex);
+    auto it = mButtonState.find(aHwid);
+    if (it != mButtonState.end()) {
+      uint32_t state = it->second;
+      if (state & 0x01) btnState |= MK_LBUTTON;
+      if (state & 0x04) btnState |= MK_RBUTTON;
+      if (state & 0x10) btnState |= MK_MBUTTON;
+    }
+  }
+  uint16_t flags = btnState | (aIsHorizontal ? 0x4000 : 0);
+  WPARAM wp = MAKEWPARAM(flags, (uint16_t)(int16_t)aDelta);
+  ::PostMessage(mOwnerHwnd, WM_MOUSEMUX_WHEEL, wp, lParam);
+#else
   WPARAM wParam = BuildMouseWParam(aHwid);
   wParam |= ((aDelta & 0xFFFF) << 16);
-
   UINT msg = aIsHorizontal ? WM_MOUSEHWHEEL : WM_MOUSEWHEEL;
   ::PostMessage(mOwnerHwnd, msg, wParam, lParam);
+#endif
 }
 
 void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMessage,

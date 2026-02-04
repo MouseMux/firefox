@@ -3,6 +3,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// Legacy singleton service - replaced by per-window MouseMuxClient.
+// Kept for reference. Removed from moz.build.
+#if 0
+
 #include "MouseMuxService.h"
 #include "MouseMuxDebugDialog.h"
 #include "nsWindow.h"
@@ -664,3 +668,5 @@ void MouseMuxService::Log(const char* aFormat, ...) {
 
 }  // namespace widget
 }  // namespace mozilla
+
+#endif  // #if 0 - legacy code

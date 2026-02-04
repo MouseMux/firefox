@@ -133,7 +133,7 @@ SOURCES += [
     "MediaKeysEventSourceFactory.cpp",
     "MouseMuxClient.cpp",
     "MouseMuxDebugDialog.cpp",
-    "MouseMuxService.cpp",
+    # "MouseMuxService.cpp",  # Legacy singleton, unused - MouseMuxClient is active
     "nsBidiKeyboard.cpp",
     "nsFilePicker.cpp",
     "nsSharePicker.cpp",

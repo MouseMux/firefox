@@ -27,6 +27,12 @@
 // Marker in wParam high bit to identify MouseMux-injected messages
 #define MOUSEMUX_MARKER 0x80000000
 
+// Input injection method: GECKO dispatches WidgetMouseEvent via custom WM_,
+// POSTMSG uses legacy PostMessage(WM_LBUTTONDOWN, ...) with MOUSEMUX_MARKER.
+#define MOUSEMUX_INPUT_GECKO    1
+#define MOUSEMUX_INPUT_POSTMSG  2
+#define MOUSEMUX_INPUT_METHOD   MOUSEMUX_INPUT_GECKO
+
 namespace mozilla {
 namespace widget {
 
