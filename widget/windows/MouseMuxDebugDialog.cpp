@@ -196,7 +196,14 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                 WS_CHILD | WS_VISIBLE | SS_LEFT,
                                 margin, contentY, ctrlWidth, 20, mDialog, (HMENU)ID_HOVER, nullptr, nullptr);
   ::SendMessage(mHoverLabel, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += 28;
+  contentY += 24;
+
+  // F12 hint
+  HWND f12Label = ::CreateWindowW(L"STATIC", L"F12 = emergency disconnect",
+                                  WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                  margin, contentY, ctrlWidth, 18, mDialog, nullptr, nullptr, nullptr);
+  ::SendMessage(f12Label, WM_SETFONT, (WPARAM)largeFont, TRUE);
+  contentY += 22;
 
   // Log area - fill remaining space minus room for hide button
   // Calculate remaining height (window height minus current Y minus bottom margin minus title bar minus button)
