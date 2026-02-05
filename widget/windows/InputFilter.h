@@ -44,6 +44,7 @@ class InputFilter {
   static void SetKeyStateForWindow(HWND hwnd, BYTE* keyState);
   static bool GetKeyStateForWindow(HWND hwnd, BYTE* outKeyState);
   static void SetSingleKeyState(HWND hwnd, int vkey, bool down, bool toggled = false);
+  static bool IsKeyDown(HWND hwnd, int vkey);
 
   // Per-window mouse button state from MouseMux
   static void SetMouseButtonState(HWND hwnd, bool left, bool right, bool middle);

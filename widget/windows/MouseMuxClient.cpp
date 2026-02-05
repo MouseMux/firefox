@@ -14,7 +14,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define MOUSEMUX_CLIENT_VERSION "5.34"
+#define MOUSEMUX_CLIENT_VERSION "5.36"
 #define MOUSEMUX_SDK_VERSION "2.2.35"
 #define MOUSEMUX_BUILD_DATE __DATE__
 
@@ -174,7 +174,35 @@ void MouseMuxClient::SendPong() {
   SendWebSocketMessage("{\"type\":\"client.pong.request.A2M\"}");
 }
 
+void MouseMuxClient::SendCapture(uint32_t aHwid, uint32_t aFlags) {
+  char msg[256];
+  snprintf(msg, sizeof(msg),
+           "{\"type\":\"pointer.capture.request.A2M\","
+           "\"hwid\":%u,\"flag\":%u}",
+           aHwid, aFlags);
+  SendWebSocketMessage(msg);
+  Log("Sent capture request: hwid=0x%X flags=0x%X", aHwid, aFlags);
+}
+
+void MouseMuxClient::SendReleaseCapture(uint32_t aHwid) {
+  char msg[256];
+  snprintf(msg, sizeof(msg),
+           "{\"type\":\"pointer.capture.release.request.A2M\","
+           "\"hwid\":%u}",
+           aHwid);
+  SendWebSocketMessage(msg);
+  Log("Sent release capture: hwid=0x%X", aHwid);
+}
+
 void MouseMuxClient::Disconnect() {
+  // Release capture if active
+  uint32_t owner = mOwnerHwid.load();
+  if (mOwnerCaptured.load() && owner != 0) {
+    SendReleaseCapture(owner);
+    mOwnerCaptured.store(false);
+  }
+  mOwnerInWindow.store(false);
+
   // Send logout before disconnecting
   if (mConnected.load()) {
     SendLogout("user");
@@ -660,6 +688,22 @@ void MouseMuxClient::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScre
         motionCount, aHwid, aScreenX, aScreenY, owner, isOwner, inWindow);
   }
 
+  // Track owner in/out transitions and sync capture state
+  if (isOwner) {
+    mOwnerInWindow.store(inWindow);
+    auto* dlg = MouseMuxDebugDialog::GetInstance();
+    bool shouldCapture = dlg && dlg->IsCaptureActive() && inWindow;
+    bool isCaptured = mOwnerCaptured.load();
+
+    if (shouldCapture && !isCaptured) {
+      SendCapture(aHwid, 0);
+      mOwnerCaptured.store(true);
+    } else if (!shouldCapture && isCaptured) {
+      SendReleaseCapture(aHwid);
+      mOwnerCaptured.store(false);
+    }
+  }
+
   // Update hover info on debug dialog for any mouse
   auto* debugDialog = MouseMuxDebugDialog::GetInstance();
   if (debugDialog && debugDialog->IsVisible()) {
@@ -764,8 +808,42 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
   bool isOwner = (aHwid == owner);
   bool inWindow = IsPointInWindow(aScreenX, aScreenY);
 
+  // Check if click is on the capture button in the debug dialog
+  if (leftDown && isOwner) {
+    auto* dlg = MouseMuxDebugDialog::GetInstance();
+    if (dlg && dlg->IsVisible()) {
+      HWND captureBtn = dlg->GetCaptureButtonHwnd();
+      if (captureBtn && ::IsWindow(captureBtn)) {
+        RECT btnRect;
+        if (::GetWindowRect(captureBtn, &btnRect)) {
+          POINT pt = {aScreenX, aScreenY};
+          if (::PtInRect(&btnRect, pt)) {
+            Log("Click on Capture button detected");
+            dlg->ToggleCapture();
+            // Sync capture state immediately
+            bool shouldCapture = dlg->IsCaptureActive() && mOwnerInWindow.load();
+            if (shouldCapture && !mOwnerCaptured.load()) {
+              SendCapture(aHwid, 0);
+              mOwnerCaptured.store(true);
+            } else if (!shouldCapture && mOwnerCaptured.load()) {
+              SendReleaseCapture(aHwid);
+              mOwnerCaptured.store(false);
+            }
+            return;  // Don't process as normal click
+          }
+        }
+      }
+    }
+  }
+
   // Release ownership if user clicked outside this window
   if (isButtonDown && !inWindow && isOwner) {
+    // Release capture if active
+    if (mOwnerCaptured.load()) {
+      SendReleaseCapture(aHwid);
+      mOwnerCaptured.store(false);
+    }
+    mOwnerInWindow.store(false);
     mOwnerHwid.store(0);
     Log("Released owner: hwid=0x%X (clicked outside)", aHwid);
     UpdateDebugStatusSafe();
@@ -917,6 +995,31 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
   // Determine if key is pressed or released
   bool isKeyDown = (aMessage == WM_KEYDOWN || aMessage == WM_SYSKEYDOWN);
   bool isKeyUp = (aMessage == WM_KEYUP || aMessage == WM_SYSKEYUP);
+
+  // Check for capture hotkey (only on keydown)
+  if (isKeyDown) {
+    auto* dlg = MouseMuxDebugDialog::GetInstance();
+    if (dlg) {
+      uint8_t hotkey = dlg->GetCaptureHotkey();
+      bool needShift = dlg->GetCaptureHotkeyShift();
+      bool shiftHeld = InputFilter::IsKeyDown(mOwnerHwnd, VK_SHIFT);
+
+      if (aVkey == hotkey && shiftHeld == needShift) {
+        Log("Capture hotkey pressed (vk=0x%X shift=%d)", hotkey, needShift);
+        dlg->ToggleCapture();
+        // Sync capture state immediately
+        bool shouldCapture = dlg->IsCaptureActive() && mOwnerInWindow.load();
+        if (shouldCapture && !mOwnerCaptured.load()) {
+          SendCapture(owner, 0);
+          mOwnerCaptured.store(true);
+        } else if (!shouldCapture && mOwnerCaptured.load()) {
+          SendReleaseCapture(owner);
+          mOwnerCaptured.store(false);
+        }
+        return;  // Don't dispatch hotkey to Firefox
+      }
+    }
+  }
 
   // Sync key state to InputFilter for this window
   if (isKeyDown || isKeyUp) {

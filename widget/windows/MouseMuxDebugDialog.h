@@ -69,8 +69,13 @@ class MouseMuxDebugDialog {
   HWND mClaimBtn = nullptr;        // Connect button
   HWND mLogEdit = nullptr;         // Log output
   HWND mHideBtn = nullptr;         // Hide button
+  HWND mCaptureBtn = nullptr;      // Capture toggle button
+  HWND mHotkeyCombo = nullptr;     // Hotkey dropdown
 
   bool mVisible = false;
+  bool mCaptureActive = false;     // Capture currently active
+  uint8_t mCaptureHotkey = VK_F11; // Hotkey VK code
+  bool mCaptureHotkeyShift = false; // Hotkey requires Shift
   bool mClaiming = false;          // True while connecting
   bool mPendingBlock = false;      // True if we need to block after connect
   uint64_t mConnectStartTime = 0;  // When connect was started (for timeout)
@@ -89,9 +94,19 @@ class MouseMuxDebugDialog {
     ID_OWNER,
     ID_HOVER,
     ID_CLAIM,
+    ID_CAPTURE_BTN,
+    ID_HOTKEY_COMBO,
     ID_LOG,
     ID_HIDE
   };
+
+ public:
+  bool IsCaptureActive() const { return mCaptureActive; }
+  void SetCaptureActive(bool aActive);
+  void ToggleCapture();
+  uint8_t GetCaptureHotkey() const { return mCaptureHotkey; }
+  bool GetCaptureHotkeyShift() const { return mCaptureHotkeyShift; }
+  HWND GetCaptureButtonHwnd() const { return mCaptureBtn; }
 };
 
 }  // namespace widget

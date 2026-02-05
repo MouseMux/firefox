@@ -103,10 +103,14 @@ class MouseMuxClient {
   void SendLogin();
   void SendLogout(const char* aReason);
   void SendPong();
+  void SendCapture(uint32_t aHwid, uint32_t aFlags);
+  void SendReleaseCapture(uint32_t aHwid);
 
   // Owner window
   HWND mOwnerHwnd;
   std::atomic<uint32_t> mOwnerHwid{0};
+  std::atomic<bool> mOwnerInWindow{false};   // Owner mouse is inside window
+  std::atomic<bool> mOwnerCaptured{false};   // Capture request sent for owner
 
   // Connection state
   std::wstring mServerUrl;

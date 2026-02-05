@@ -16,7 +16,7 @@
 
 #define SUBCLASS_ID 1001
 
-#define MOUSEMUX_VERSION "5.34"
+#define MOUSEMUX_VERSION "5.36"
 
 namespace mozilla {
 namespace widget {
@@ -203,7 +203,35 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                   WS_CHILD | WS_VISIBLE | SS_LEFT,
                                   margin, contentY, ctrlWidth, 18, mDialog, nullptr, nullptr, nullptr);
   ::SendMessage(f12Label, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += 22;
+  contentY += 24;
+
+  // Capture button
+  mCaptureBtn = ::CreateWindowW(L"BUTTON", L"Capture",
+                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                 margin, contentY, ctrlWidth / 2 - 5, 28, mDialog, (HMENU)ID_CAPTURE_BTN, nullptr, nullptr);
+  ::SendMessage(mCaptureBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+
+  // Hotkey dropdown (right side)
+  mHotkeyCombo = ::CreateWindowW(L"COMBOBOX", nullptr,
+                                  WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                  margin + ctrlWidth / 2 + 5, contentY, ctrlWidth / 2 - 5, 200,
+                                  mDialog, (HMENU)ID_HOTKEY_COMBO, nullptr, nullptr);
+  ::SendMessage(mHotkeyCombo, WM_SETFONT, (WPARAM)largeFont, TRUE);
+
+  // Populate hotkey dropdown
+  const wchar_t* hotkeyOptions[] = {
+    L"F1", L"F2", L"F3", L"F4", L"F5", L"F6",
+    L"F7", L"F8", L"F9", L"F10", L"F11", L"F12",
+    L"Shift+F1", L"Shift+F2", L"Shift+F3", L"Shift+F4",
+    L"Shift+F5", L"Shift+F6", L"Shift+F7", L"Shift+F8",
+    L"Shift+F9", L"Shift+F10", L"Shift+F11", L"Shift+F12",
+    L"Escape", L"Pause"
+  };
+  for (const wchar_t* opt : hotkeyOptions) {
+    ::SendMessageW(mHotkeyCombo, CB_ADDSTRING, 0, (LPARAM)opt);
+  }
+  ::SendMessageW(mHotkeyCombo, CB_SETCURSEL, 10, 0);  // Default: F11 (index 10)
+  contentY += 34;
 
   // Log area - fill remaining space minus room for hide button
   // Calculate remaining height (window height minus current Y minus bottom margin minus title bar minus button)
@@ -291,6 +319,34 @@ LRESULT MouseMuxDebugDialog::HandleMessage(UINT msg, WPARAM wParam, LPARAM lPara
       switch (LOWORD(wParam)) {
         case ID_CLAIM: OnClaimWindow(); return 0;
         case ID_HIDE: Hide(); return 0;
+        case ID_CAPTURE_BTN:
+          ToggleCapture();
+          return 0;
+        case ID_HOTKEY_COMBO:
+          if (HIWORD(wParam) == CBN_SELCHANGE) {
+            int sel = (int)::SendMessage(mHotkeyCombo, CB_GETCURSEL, 0, 0);
+            if (sel >= 0 && sel < 12) {
+              // F1-F12
+              mCaptureHotkey = VK_F1 + sel;
+              mCaptureHotkeyShift = false;
+            } else if (sel >= 12 && sel < 24) {
+              // Shift+F1-F12
+              mCaptureHotkey = VK_F1 + (sel - 12);
+              mCaptureHotkeyShift = true;
+            } else if (sel == 24) {
+              // Escape
+              mCaptureHotkey = VK_ESCAPE;
+              mCaptureHotkeyShift = false;
+            } else if (sel == 25) {
+              // Pause
+              mCaptureHotkey = VK_PAUSE;
+              mCaptureHotkeyShift = false;
+            }
+            wchar_t buf[32];
+            ::SendMessageW(mHotkeyCombo, CB_GETLBTEXT, sel, (LPARAM)buf);
+            Log("Hotkey set to: %S", buf);
+          }
+          return 0;
       }
       break;
     case WM_TIMER:
@@ -345,7 +401,11 @@ void MouseMuxDebugDialog::OnClaimWindow() {
   }
 
   if (mClient->IsConnected()) {
-    // Disconnect - first unblock, then disconnect
+    // Disconnect - reset capture state, unblock, then disconnect
+    if (mCaptureActive) {
+      SetCaptureActive(false);
+    }
+
     Log("Unblocking input...");
     if (mFirefoxHwnd) {
       InputFilter::DisableForWindow(mFirefoxHwnd);
@@ -521,6 +581,23 @@ void MouseMuxDebugDialog::StopTrackingFirefox() {
   if (!mFirefoxHwnd || !::IsWindow(mFirefoxHwnd)) return;
 
   ::RemoveWindowSubclass(mFirefoxHwnd, FirefoxSubclassProc, SUBCLASS_ID);
+}
+
+void MouseMuxDebugDialog::SetCaptureActive(bool aActive) {
+  mCaptureActive = aActive;
+  if (mCaptureBtn) {
+    ::SetWindowTextW(mCaptureBtn, aActive ? L"Release" : L"Capture");
+  }
+  Log("Capture %s", aActive ? "ACTIVE" : "released");
+}
+
+void MouseMuxDebugDialog::ToggleCapture() {
+  if (!mClient || !mClient->IsConnected()) {
+    Log("Cannot toggle capture - not connected");
+    return;
+  }
+  SetCaptureActive(!mCaptureActive);
+  // Actual capture/release is handled by MouseMuxClient checking IsCaptureActive()
 }
 
 LRESULT CALLBACK MouseMuxDebugDialog::FirefoxSubclassProc(

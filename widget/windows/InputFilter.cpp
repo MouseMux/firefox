@@ -206,6 +206,19 @@ void InputFilter::SetSingleKeyState(HWND hwnd, int vkey, bool down, bool toggled
   state.valid = true;
 }
 
+bool InputFilter::IsKeyDown(HWND hwnd, int vkey) {
+  if (vkey < 0 || vkey > 255) return false;
+
+  HWND topLevel = GetTopLevelWindow(hwnd);
+  if (!topLevel) topLevel = hwnd;
+  std::lock_guard<std::mutex> lock(sKeyboardMutex);
+  auto it = sKeyboardStates.find(topLevel);
+  if (it != sKeyboardStates.end() && it->second.valid) {
+    return (it->second.keys[vkey] & 0x80) != 0;
+  }
+  return false;
+}
+
 // Mouse button state management
 void InputFilter::SetMouseButtonState(HWND hwnd, bool left, bool right, bool middle) {
   HWND topLevel = GetTopLevelWindow(hwnd);
