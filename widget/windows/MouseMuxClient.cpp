@@ -69,11 +69,6 @@ MouseMuxClient::~MouseMuxClient() {
       mWorkerThread.join();
     }
   }
-
-  if (mDebugDialog && ::IsWindow(mDebugDialog)) {
-    ::DestroyWindow(mDebugDialog);
-  }
-  mDebugDialog = nullptr;
 }
 
 bool MouseMuxClient::Connect(const wchar_t* aUrl) {
@@ -467,8 +462,12 @@ void MouseMuxClient::WebSocketThread() {
 }
 
 void MouseMuxClient::UpdateDebugStatusSafe() {
-  if (mDebugDialog && ::IsWindow(mDebugDialog)) {
-    ::PostMessage(mDebugDialog, WM_MOUSEMUX_UPDATE, 0, 0);
+  auto* dlg = MouseMuxDebugDialog::GetInstance();
+  if (dlg && dlg->IsVisible()) {
+    HWND hwnd = dlg->GetDialogHwnd();
+    if (hwnd && ::IsWindow(hwnd)) {
+      ::PostMessage(hwnd, WM_MOUSEMUX_UPDATE, 0, 0);
+    }
   }
 }
 
@@ -1099,37 +1098,6 @@ void MouseMuxClient::Log(const char* aFormat, ...) {
             mOwnerHwnd, buf);
     fclose(f);
   }
-
-  AppendLog(buf);
-}
-
-void MouseMuxClient::AppendLog(const char* text) {
-  {
-    std::lock_guard<std::mutex> lock(mLogMutex);
-    mLogLines.push_back(text);
-    while (mLogLines.size() > 100) {
-      mLogLines.erase(mLogLines.begin());
-    }
-  }
-  if (mDebugDialog && ::IsWindow(mDebugDialog)) {
-    ::PostMessage(mDebugDialog, WM_MOUSEMUX_LOG, 0, 0);
-  }
-}
-
-void MouseMuxClient::FlushLogToUI() {
-  if (!mLogEdit || !::IsWindow(mLogEdit)) return;
-
-  std::string fullText;
-  {
-    std::lock_guard<std::mutex> lock(mLogMutex);
-    for (const auto& line : mLogLines) {
-      fullText += line;
-      fullText += "\r\n";
-    }
-  }
-  ::SetWindowTextA(mLogEdit, fullText.c_str());
-  int lineCount = (int)::SendMessage(mLogEdit, EM_GETLINECOUNT, 0, 0);
-  ::SendMessage(mLogEdit, EM_LINESCROLL, 0, lineCount);
 }
 
 void MouseMuxClient::ShowDebugDialog() {
@@ -1144,158 +1112,6 @@ void MouseMuxClient::HideDebugDialog() {
   auto* dialog = MouseMuxDebugDialog::GetInstance();
   dialog->Hide();
   mDebugDialogVisible = false;
-}
-
-void MouseMuxClient::CreateDebugDialog() {
-  static std::once_flag classRegisterFlag;
-  std::call_once(classRegisterFlag, []() {
-    WNDCLASSEXW wc = {0};
-    wc.cbSize = sizeof(wc);
-    wc.lpfnWndProc = DebugDialogProc;
-    wc.hInstance = ::GetModuleHandle(nullptr);
-    wc.hCursor = ::LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = L"MouseMuxClientDebug";
-    ::RegisterClassExW(&wc);
-  });
-
-  RECT ownerRect = {100, 100, 500, 450};
-  if (mOwnerHwnd && ::IsWindow(mOwnerHwnd)) {
-    ::GetWindowRect(mOwnerHwnd, &ownerRect);
-  }
-
-  wchar_t title[256];
-  wchar_t winTitle[128] = L"(unknown)";
-  if (mOwnerHwnd && ::IsWindow(mOwnerHwnd)) {
-    ::GetWindowTextW(mOwnerHwnd, winTitle, 128);
-  }
-  swprintf(title, 256, L"MouseMux v%S - %s [%p]", MOUSEMUX_CLIENT_VERSION, winTitle, mOwnerHwnd);
-
-  mDebugDialog = ::CreateWindowExW(
-      WS_EX_TOPMOST | WS_EX_APPWINDOW, L"MouseMuxClientDebug", title,
-      WS_OVERLAPPEDWINDOW, ownerRect.right + 10, ownerRect.top, 800, 400,
-      nullptr, nullptr, ::GetModuleHandle(nullptr), this);
-
-  if (!mDebugDialog) {
-    Log("Failed to create debug dialog: %d", GetLastError());
-    return;
-  }
-
-  mStatusLabel = ::CreateWindowW(L"STATIC", L"Status: Disconnected",
-                                 WS_CHILD | WS_VISIBLE, 10, 10, 780, 20,
-                                 mDebugDialog, (HMENU)ID_STATUS, nullptr, nullptr);
-
-  mConnectBtn = ::CreateWindowW(L"BUTTON", L"Connect",
-                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 10, 40,
-                                120, 25, mDebugDialog, (HMENU)ID_CONNECT, nullptr, nullptr);
-
-  mBlockBtn = ::CreateWindowW(L"BUTTON", L"Block Input",
-                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 140, 40,
-                              120, 25, mDebugDialog, (HMENU)ID_BLOCK, nullptr, nullptr);
-
-  mLogEdit = ::CreateWindowExW(
-      WS_EX_CLIENTEDGE, L"EDIT", L"",
-      WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
-      10, 75, 770, 280, mDebugDialog, (HMENU)ID_LOG, nullptr, nullptr);
-
-  HFONT hFont = (HFONT)::GetStockObject(DEFAULT_GUI_FONT);
-  if (mStatusLabel) ::SendMessage(mStatusLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
-  if (mConnectBtn) ::SendMessage(mConnectBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
-  if (mBlockBtn) ::SendMessage(mBlockBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
-  if (mLogEdit) ::SendMessage(mLogEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
-
-  Log("Debug dialog created");
-}
-
-void MouseMuxClient::UpdateDebugStatus() {
-  if (!mStatusLabel || !::IsWindow(mStatusLabel)) return;
-
-  wchar_t buf[512];
-  wchar_t winTitle[128] = L"";
-  if (mOwnerHwnd && ::IsWindow(mOwnerHwnd)) {
-    ::GetWindowTextW(mOwnerHwnd, winTitle, 128);
-  }
-  uint32_t owner = mOwnerHwid.load();
-  bool connected = mConnected.load();
-  bool blocked = InputFilter::IsEnabledForWindow(mOwnerHwnd);
-
-  swprintf(buf, 512, L"%s [%p] | %s | %s | Owner: %s",
-           winTitle, mOwnerHwnd,
-           connected ? L"Connected" : L"Disconnected",
-           blocked ? L"BLOCKED" : L"Normal",
-           owner ? std::to_wstring(owner).c_str() : L"None");
-  ::SetWindowTextW(mStatusLabel, buf);
-
-  if (mConnectBtn && ::IsWindow(mConnectBtn)) {
-    ::SetWindowTextW(mConnectBtn, connected ? L"Disconnect" : L"Connect");
-  }
-  if (mBlockBtn && ::IsWindow(mBlockBtn)) {
-    ::SetWindowTextW(mBlockBtn, blocked ? L"Unblock" : L"Block Input");
-  }
-}
-
-LRESULT CALLBACK MouseMuxClient::DebugDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-  MouseMuxClient* self = nullptr;
-
-  if (msg == WM_CREATE) {
-    CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
-    self = (MouseMuxClient*)cs->lpCreateParams;
-    ::SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)self);
-  } else {
-    self = (MouseMuxClient*)::GetWindowLongPtr(hwnd, GWLP_USERDATA);
-  }
-
-  if (self) {
-    return self->HandleDebugMessage(hwnd, msg, wParam, lParam);
-  }
-  return ::DefWindowProc(hwnd, msg, wParam, lParam);
-}
-
-LRESULT MouseMuxClient::HandleDebugMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-  switch (msg) {
-    case WM_MOUSEMUX_UPDATE:
-      UpdateDebugStatus();
-      return 0;
-
-    case WM_MOUSEMUX_LOG:
-      FlushLogToUI();
-      return 0;
-
-    case WM_COMMAND:
-      if (LOWORD(wParam) == ID_CONNECT) {
-        if (mConnected.load()) {
-          Disconnect();
-        } else {
-          Connect();
-        }
-        return 0;
-      }
-      if (LOWORD(wParam) == ID_BLOCK) {
-        if (InputFilter::IsEnabledForWindow(mOwnerHwnd)) {
-          InputFilter::DisableForWindow(mOwnerHwnd);
-          Log("Input filter DISABLED");
-        } else {
-          InputFilter::EnableForWindow(mOwnerHwnd);
-          Log("Input filter ENABLED");
-        }
-        UpdateDebugStatus();
-        return 0;
-      }
-      break;
-
-    case WM_CLOSE:
-      HideDebugDialog();
-      return 0;
-
-    case WM_DESTROY:
-      mDebugDialog = nullptr;
-      mStatusLabel = nullptr;
-      mConnectBtn = nullptr;
-      mBlockBtn = nullptr;
-      mLogEdit = nullptr;
-      return 0;
-  }
-  return ::DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 }  // namespace widget

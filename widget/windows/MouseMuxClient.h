@@ -105,6 +105,7 @@ class MouseMuxClient {
   void SendPong();
   void SendCapture(uint32_t aHwid, uint32_t aFlags);
   void SendReleaseCapture(uint32_t aHwid);
+  void UpdateDebugStatusSafe();
 
   // Owner window
   HWND mOwnerHwnd;
@@ -138,32 +139,8 @@ class MouseMuxClient {
   std::map<uint32_t, uint32_t> mMouseToKeyboard;
   std::mutex mMappingMutex;
 
-  // Debug dialog
-  HWND mDebugDialog = nullptr;
-  HWND mStatusLabel = nullptr;
-  HWND mLogEdit = nullptr;
-  HWND mConnectBtn = nullptr;
-  HWND mBlockBtn = nullptr;
-  std::vector<std::string> mLogLines;
-  std::mutex mLogMutex;
+  // Debug dialog state
   bool mDebugDialogVisible = false;
-
-  void CreateDebugDialog();
-  void UpdateDebugStatus();       // Call only from UI thread
-  void UpdateDebugStatusSafe();   // Safe from any thread (posts message)
-  void AppendLog(const char* text);
-  void FlushLogToUI();
-
-  static LRESULT CALLBACK DebugDialogProc(HWND hwnd, UINT msg, WPARAM wParam,
-                                          LPARAM lParam);
-  LRESULT HandleDebugMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
-  enum DebugControls {
-    ID_STATUS = 1001,
-    ID_CONNECT = 1002,
-    ID_BLOCK = 1003,
-    ID_LOG = 1004
-  };
 };
 
 }  // namespace widget
