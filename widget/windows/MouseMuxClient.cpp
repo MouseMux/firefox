@@ -808,29 +808,52 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
   bool isOwner = (aHwid == owner);
   bool inWindow = IsPointInWindow(aScreenX, aScreenY);
 
-  // Check if click is on the capture button in the debug dialog
+  // Check if click is on the debug dialog - handle via MouseMux since
+  // native input may be blocked/intercepted when connected
   if (leftDown && isOwner) {
     auto* dlg = MouseMuxDebugDialog::GetInstance();
     if (dlg && dlg->IsVisible()) {
-      HWND captureBtn = dlg->GetCaptureButtonHwnd();
-      if (captureBtn && ::IsWindow(captureBtn)) {
-        RECT btnRect;
-        if (::GetWindowRect(captureBtn, &btnRect)) {
-          POINT pt = {aScreenX, aScreenY};
-          if (::PtInRect(&btnRect, pt)) {
-            Log("Click on Capture button detected");
-            dlg->ToggleCapture();
-            // Sync capture state immediately
-            bool shouldCapture = dlg->IsCaptureActive() && mOwnerInWindow.load();
-            if (shouldCapture && !mOwnerCaptured.load()) {
-              SendCapture(aHwid, 0);
-              mOwnerCaptured.store(true);
-            } else if (!shouldCapture && mOwnerCaptured.load()) {
-              SendReleaseCapture(aHwid);
-              mOwnerCaptured.store(false);
+      POINT pt = {aScreenX, aScreenY};
+      HWND dialogHwnd = dlg->GetDialogHwnd();
+
+      // Check if click is anywhere on the dialog
+      if (dialogHwnd && ::IsWindow(dialogHwnd)) {
+        RECT dlgRect;
+        if (::GetWindowRect(dialogHwnd, &dlgRect) && ::PtInRect(&dlgRect, pt)) {
+          // Click is on dialog - check specific buttons
+
+          // Capture button
+          HWND captureBtn = dlg->GetCaptureButtonHwnd();
+          if (captureBtn && ::IsWindow(captureBtn) && ::IsWindowEnabled(captureBtn)) {
+            RECT btnRect;
+            if (::GetWindowRect(captureBtn, &btnRect) && ::PtInRect(&btnRect, pt)) {
+              Log("Click on Capture button");
+              dlg->ToggleCapture();
+              if (dlg->IsCaptureActive() && !mOwnerCaptured.load()) {
+                SendCapture(aHwid, 0);
+                mOwnerCaptured.store(true);
+              } else if (!dlg->IsCaptureActive() && mOwnerCaptured.load()) {
+                SendReleaseCapture(aHwid);
+                mOwnerCaptured.store(false);
+              }
+              return;
             }
-            return;  // Don't process as normal click
           }
+
+          // Release button
+          HWND releaseBtn = dlg->GetReleaseButtonHwnd();
+          if (releaseBtn && ::IsWindow(releaseBtn) && ::IsWindowEnabled(releaseBtn)) {
+            RECT btnRect;
+            if (::GetWindowRect(releaseBtn, &btnRect) && ::PtInRect(&btnRect, pt)) {
+              Log("Click on Release button");
+              dlg->ReleaseOwner();
+              return;
+            }
+          }
+
+          // Click was on dialog but not on a handled button - ignore
+          // (don't process as Firefox click)
+          return;
         }
       }
     }

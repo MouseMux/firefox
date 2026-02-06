@@ -60,17 +60,14 @@ class MouseMuxDebugDialog {
   HWND mFirefoxHwnd = nullptr;       // Firefox window we're docked to
 
   HWND mDialog = nullptr;
-  HWND mLogoStatic = nullptr;      // Logo icon
-  HWND mTitleLabel = nullptr;      // "MouseMux" title
-  HWND mStatusLabel = nullptr;     // Connection status
-  HWND mBlockedLabel = nullptr;    // Input blocking status
-  HWND mOwnerLabel = nullptr;      // Owner status
-  HWND mHoverLabel = nullptr;      // Shows hovering user
+  HWND mProfileCombo = nullptr;    // Profile dropdown
+  HWND mStatusLabel = nullptr;     // Status with colored bullet
   HWND mClaimBtn = nullptr;        // Connect button
-  HWND mLogEdit = nullptr;         // Log output
-  HWND mHideBtn = nullptr;         // Hide button
   HWND mCaptureBtn = nullptr;      // Capture toggle button
   HWND mHotkeyCombo = nullptr;     // Hotkey dropdown
+  HWND mReleaseBtn = nullptr;      // Release owner button
+  HWND mLogEdit = nullptr;         // Log output
+  HWND mHideBtn = nullptr;         // Minimize button
 
   bool mVisible = false;
   bool mCaptureActive = false;     // Capture currently active
@@ -79,23 +76,22 @@ class MouseMuxDebugDialog {
   bool mClaiming = false;          // True while connecting
   bool mPendingBlock = false;      // True if we need to block after connect
   uint64_t mConnectStartTime = 0;  // When connect was started (for timeout)
-  uint32_t mHoveringMouseHwid = 0;
-  uint32_t mHoveringUserId = 0;
 
   std::vector<std::string> mLogLines;
   std::mutex mLogMutex;
-  std::mutex mHoverMutex;
+  std::vector<std::wstring> mProfileNames;
+  std::vector<std::wstring> mProfilePaths;
+
+  void LoadFirefoxProfiles();
+  void LaunchWithProfile(int profileIndex);
 
   enum {
-    ID_LOGO = 100,
-    ID_TITLE,
+    ID_PROFILE_COMBO = 100,
     ID_STATUS,
-    ID_BLOCKED,
-    ID_OWNER,
-    ID_HOVER,
     ID_CLAIM,
     ID_CAPTURE_BTN,
     ID_HOTKEY_COMBO,
+    ID_RELEASE_BTN,
     ID_LOG,
     ID_HIDE
   };
@@ -104,9 +100,11 @@ class MouseMuxDebugDialog {
   bool IsCaptureActive() const { return mCaptureActive; }
   void SetCaptureActive(bool aActive);
   void ToggleCapture();
+  void ReleaseOwner();
   uint8_t GetCaptureHotkey() const { return mCaptureHotkey; }
   bool GetCaptureHotkeyShift() const { return mCaptureHotkeyShift; }
   HWND GetCaptureButtonHwnd() const { return mCaptureBtn; }
+  HWND GetReleaseButtonHwnd() const { return mReleaseBtn; }
 };
 
 }  // namespace widget

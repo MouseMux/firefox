@@ -9,14 +9,16 @@
 #include <cstdio>
 #include <cstdarg>
 #include <shlwapi.h>
+#include <shlobj.h>
 #include <commctrl.h>
 
 #pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "comctl32.lib")
 
 #define SUBCLASS_ID 1001
 
-#define MOUSEMUX_VERSION "5.36"
+#define MOUSEMUX_VERSION "5.38"
 
 namespace mozilla {
 namespace widget {
@@ -79,11 +81,8 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   // White background
   static HBRUSH whiteBrush = (HBRUSH)::GetStockObject(WHITE_BRUSH);
 
-  // Load icon from exe directory
+  // Load icon from exe directory (for title bar only)
   std::wstring iconPath = GetExeDirectory() + L"\\icon.ico";
-  // Load 48x48 for logo display (1.5x of 32)
-  HICON hIconLarge = (HICON)::LoadImageW(nullptr, iconPath.c_str(), IMAGE_ICON,
-                                          48, 48, LR_LOADFROMFILE);
   HICON hIcon = (HICON)::LoadImageW(nullptr, iconPath.c_str(), IMAGE_ICON,
                                      32, 32, LR_LOADFROMFILE);
   HICON hIconSmall = (HICON)::LoadImageW(nullptr, iconPath.c_str(), IMAGE_ICON,
@@ -102,22 +101,17 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
 
   // Calculate initial position docked to Firefox
   int x = 100, y = 100;
-  int width = 280, height = 600;  // Default height
+  int width = 420, height = 300;  // Will be resized after controls created
   if (mFirefoxHwnd && ::IsWindow(mFirefoxHwnd)) {
     RECT ffRect;
     if (::GetWindowRect(mFirefoxHwnd, &ffRect)) {
       x = ffRect.right;  // Dock to right edge
       y = ffRect.top;
-      // Match Firefox height exactly
-      height = ffRect.bottom - ffRect.top;
     }
   }
 
-  // WS_EX_APPWINDOW = has taskbar entry (so user can restore after hide)
-  // No owner window - owned windows don't get taskbar entries
-  // We use subclassing to track Firefox position instead
-  // Use WS_OVERLAPPEDWINDOW for proper taskbar integration, remove resize/maximize
-  DWORD style = WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME;
+  // Only close button in title bar (no minimize/maximize), keep icon
+  DWORD style = WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_MINIMIZEBOX & ~WS_THICKFRAME;
   mDialog = ::CreateWindowExW(
       WS_EX_APPWINDOW, L"MouseMuxOwnerDialog", L"MouseMux",
       style | WS_VISIBLE,
@@ -137,86 +131,57 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   int margin = 10;
   int ctrlWidth = width - 2 * margin - 20;  // Account for window borders
 
-  // Create fonts (18px for controls, 22px for title)
-  HFONT largeFont = ::CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+  // Create fonts
+  HFONT largeFont = ::CreateFontW(25, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-  HFONT btnFont = ::CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+  HFONT btnFont = ::CreateFontW(25, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-  HFONT titleFont = ::CreateFontW(22, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                   CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
-  // Logo icon at top (48x48, 1.5x bigger)
-  if (hIconLarge) {
-    mLogoStatic = ::CreateWindowW(L"STATIC", nullptr,
-                                   WS_CHILD | WS_VISIBLE | SS_ICON,
-                                   margin, contentY, 48, 48, mDialog, (HMENU)ID_LOGO, nullptr, nullptr);
-    ::SendMessage(mLogoStatic, STM_SETICON, (WPARAM)hIconLarge, 0);
-
-    // Title next to icon
-    mTitleLabel = ::CreateWindowW(L"STATIC", L"MouseMux",
-                                   WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                   margin + 56, contentY + 10, 180, 28, mDialog, (HMENU)ID_TITLE, nullptr, nullptr);
-    ::SendMessage(mTitleLabel, WM_SETFONT, (WPARAM)titleFont, TRUE);
-    contentY += 58;
-  }
+  // Profile dropdown
+  mProfileCombo = ::CreateWindowW(L"COMBOBOX", nullptr,
+                                   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                   margin, contentY, ctrlWidth, 200,
+                                   mDialog, (HMENU)ID_PROFILE_COMBO, nullptr, nullptr);
+  ::SendMessage(mProfileCombo, WM_SETFONT, (WPARAM)largeFont, TRUE);
+  LoadFirefoxProfiles();
+  contentY += 38;
 
   // Connect button
   mClaimBtn = ::CreateWindowW(L"BUTTON", L"Connect",
                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                              margin, contentY, ctrlWidth, 35, mDialog, (HMENU)ID_CLAIM, nullptr, nullptr);
+                              margin, contentY, ctrlWidth, 32, mDialog, (HMENU)ID_CLAIM, nullptr, nullptr);
   ::SendMessage(mClaimBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
-  contentY += 42;
+  contentY += 38;
 
-  // Connection status
-  mStatusLabel = ::CreateWindowW(L"STATIC", L"Connection: Not connected",
+  // Status line with colored bullet: "● Disconnected" or "● Connected | Owner: 0x1234"
+  mStatusLabel = ::CreateWindowW(L"STATIC", L"\u25CF Disconnected",
                                  WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                 margin, contentY, ctrlWidth, 20, mDialog, (HMENU)ID_STATUS, nullptr, nullptr);
+                                 margin, contentY, ctrlWidth, 28, mDialog, (HMENU)ID_STATUS, nullptr, nullptr);
   ::SendMessage(mStatusLabel, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += 22;
+  contentY += 32;
 
-  // Input blocking status
-  mBlockedLabel = ::CreateWindowW(L"STATIC", L"Input: Normal (not blocked)",
-                                  WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                  margin, contentY, ctrlWidth, 20, mDialog, (HMENU)ID_BLOCKED, nullptr, nullptr);
-  ::SendMessage(mBlockedLabel, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += 22;
-
-  // Owner status
-  mOwnerLabel = ::CreateWindowW(L"STATIC", L"Owner: None",
-                                WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                margin, contentY, ctrlWidth, 20, mDialog, (HMENU)ID_OWNER, nullptr, nullptr);
-  ::SendMessage(mOwnerLabel, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += 22;
-
-  // Hover label
-  mHoverLabel = ::CreateWindowW(L"STATIC", L"Hovering: -",
-                                WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                margin, contentY, ctrlWidth, 20, mDialog, (HMENU)ID_HOVER, nullptr, nullptr);
-  ::SendMessage(mHoverLabel, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += 24;
-
-  // F12 hint
-  HWND f12Label = ::CreateWindowW(L"STATIC", L"F12 = emergency disconnect",
-                                  WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                  margin, contentY, ctrlWidth, 18, mDialog, nullptr, nullptr, nullptr);
-  ::SendMessage(f12Label, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += 24;
-
-  // Capture button
+  // Row 1: [Capture] [Hotkey dropdown] - each half width
+  int gap = 5;
+  int halfWidth = (ctrlWidth - gap) / 2;
   mCaptureBtn = ::CreateWindowW(L"BUTTON", L"Capture",
-                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                 margin, contentY, ctrlWidth / 2 - 5, 28, mDialog, (HMENU)ID_CAPTURE_BTN, nullptr, nullptr);
+                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
+                                 margin, contentY, halfWidth, 32, mDialog, (HMENU)ID_CAPTURE_BTN, nullptr, nullptr);
   ::SendMessage(mCaptureBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
 
-  // Hotkey dropdown (right side)
   mHotkeyCombo = ::CreateWindowW(L"COMBOBOX", nullptr,
                                   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                  margin + ctrlWidth / 2 + 5, contentY, ctrlWidth / 2 - 5, 200,
+                                  margin + halfWidth + gap, contentY, halfWidth, 200,
                                   mDialog, (HMENU)ID_HOTKEY_COMBO, nullptr, nullptr);
   ::SendMessage(mHotkeyCombo, WM_SETFONT, (WPARAM)largeFont, TRUE);
+  contentY += 38;
+
+  // Row 2: [Release Owner] - full width
+  mReleaseBtn = ::CreateWindowW(L"BUTTON", L"Release Owner",
+                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
+                                 margin, contentY, ctrlWidth, 32, mDialog, (HMENU)ID_RELEASE_BTN, nullptr, nullptr);
+  ::SendMessage(mReleaseBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
 
   // Populate hotkey dropdown
   const wchar_t* hotkeyOptions[] = {
@@ -231,27 +196,27 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
     ::SendMessageW(mHotkeyCombo, CB_ADDSTRING, 0, (LPARAM)opt);
   }
   ::SendMessageW(mHotkeyCombo, CB_SETCURSEL, 10, 0);  // Default: F11 (index 10)
-  contentY += 34;
+  contentY += 38;
 
-  // Log area - fill remaining space minus room for hide button
-  // Calculate remaining height (window height minus current Y minus bottom margin minus title bar minus button)
-  int buttonHeight = 35;
-  int buttonMargin = 10;
-  int logHeight = height - contentY - margin - 30 - buttonHeight - buttonMargin;  // 30 for title bar
-  if (logHeight < 300) logHeight = 300;  // Minimum height (3x taller)
-
+  // Log area
+  int logHeight = 180;
   mLogEdit = ::CreateWindowExW(
       WS_EX_CLIENTEDGE, L"EDIT", L"",
       WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
       margin, contentY, ctrlWidth, logHeight, mDialog, (HMENU)ID_LOG, nullptr, nullptr);
   ::SendMessage(mLogEdit, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += logHeight + buttonMargin;
+  contentY += logHeight + 10;
 
   // Minimize button at bottom
   mHideBtn = ::CreateWindowW(L"BUTTON", L"Minimize",
                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                             margin, contentY, ctrlWidth, buttonHeight, mDialog, (HMENU)ID_HIDE, nullptr, nullptr);
+                             margin, contentY, ctrlWidth, 32, mDialog, (HMENU)ID_HIDE, nullptr, nullptr);
   ::SendMessage(mHideBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  contentY += 32 + 15;
+
+  // Resize dialog to fit content (contentY + title bar + border)
+  int finalHeight = contentY + 45;
+  ::SetWindowPos(mDialog, nullptr, 0, 0, width, finalHeight, SWP_NOMOVE | SWP_NOZORDER);
 
   // Start a timer to periodically update status (connection is async)
   ::SetTimer(mDialog, 1, 500, nullptr);  // 500ms update interval
@@ -259,9 +224,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   UpdateStatus();
 
   // Log startup info
-  Log("MouseMux Firefox Integration v%s", MOUSEMUX_VERSION);
-  Log("Build date: %s %s", __DATE__, __TIME__);
-  Log("Ready - click Connect to start");
+  Log("Firefox MouseMux v%s", MOUSEMUX_VERSION);
 }
 
 void MouseMuxDebugDialog::Show() {
@@ -308,6 +271,9 @@ LRESULT CALLBACK MouseMuxDebugDialog::DialogProc(HWND hwnd, UINT msg, WPARAM wPa
 
 LRESULT MouseMuxDebugDialog::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
+    case WM_MOUSEMUX_UPDATE:
+      UpdateStatus();
+      return 0;
     case WM_CTLCOLORSTATIC: {
       // Return white brush for all static controls (icon, title, labels)
       HDC hdc = (HDC)wParam;
@@ -320,7 +286,17 @@ LRESULT MouseMuxDebugDialog::HandleMessage(UINT msg, WPARAM wParam, LPARAM lPara
         case ID_CLAIM: OnClaimWindow(); return 0;
         case ID_HIDE: Hide(); return 0;
         case ID_CAPTURE_BTN:
-          ToggleCapture();
+          // Only handle via WM_COMMAND when no owner (native clicks work)
+          // When there's an owner, MouseMuxClient handles button clicks
+          if (mClient && mClient->GetOwnerHwid() == 0) {
+            ToggleCapture();
+          }
+          return 0;
+        case ID_RELEASE_BTN:
+          // Only handle via WM_COMMAND when no owner
+          if (mClient && mClient->GetOwnerHwid() == 0) {
+            ReleaseOwner();
+          }
           return 0;
         case ID_HOTKEY_COMBO:
           if (HIWORD(wParam) == CBN_SELCHANGE) {
@@ -437,29 +413,11 @@ void MouseMuxDebugDialog::OnClaimWindow() {
 }
 
 void MouseMuxDebugDialog::SetHoveringUser(uint32_t mouseHwid, uint32_t userId) {
-  std::lock_guard<std::mutex> lock(mHoverMutex);
-  mHoveringMouseHwid = mouseHwid;
-  mHoveringUserId = userId;
-
-  if (mHoverLabel) {
-    wchar_t buf[128];
-    if (userId > 0) {
-      swprintf(buf, 128, L"Hovering: User %u (mouse 0x%X)", userId, mouseHwid);
-    } else {
-      swprintf(buf, 128, L"Hovering: Mouse 0x%X", mouseHwid);
-    }
-    ::SetWindowTextW(mHoverLabel, buf);
-  }
+  (void)mouseHwid;
+  (void)userId;
 }
 
 void MouseMuxDebugDialog::ClearHoveringUser() {
-  std::lock_guard<std::mutex> lock(mHoverMutex);
-  mHoveringMouseHwid = 0;
-  mHoveringUserId = 0;
-
-  if (mHoverLabel) {
-    ::SetWindowTextW(mHoverLabel, L"Hovering: -");
-  }
 }
 
 void MouseMuxDebugDialog::UpdateStatus() {
@@ -467,42 +425,26 @@ void MouseMuxDebugDialog::UpdateStatus() {
 
   bool connected = mClient ? mClient->IsConnected() : false;
   uint32_t ownerHwid = mClient ? mClient->GetOwnerHwid() : 0;
-  bool blocked = mFirefoxHwnd ? InputFilter::IsEnabledForWindow(mFirefoxHwnd) : false;
+  bool hasOwner = ownerHwid != 0;
 
-  // Connection status
+  // Status with colored bullet: green=connected, red=disconnected
   if (mStatusLabel) {
     wchar_t buf[128];
     if (connected) {
-      swprintf(buf, 128, L"Connection: Connected");
+      if (hasOwner) {
+        swprintf(buf, 128, L"\u25CF Connected | Owner: 0x%X", ownerHwid);
+      } else {
+        swprintf(buf, 128, L"\u25CF Connected | No owner");
+      }
     } else if (mClaiming) {
-      swprintf(buf, 128, L"Connection: Connecting...");
+      swprintf(buf, 128, L"\u25CB Connecting...");
     } else {
-      swprintf(buf, 128, L"Connection: Not connected");
+      swprintf(buf, 128, L"\u25CF Disconnected");
     }
     ::SetWindowTextW(mStatusLabel, buf);
   }
 
-  // Input blocking status
-  if (mBlockedLabel) {
-    if (blocked) {
-      ::SetWindowTextW(mBlockedLabel, L"Input: BLOCKED (MouseMux only)");
-    } else {
-      ::SetWindowTextW(mBlockedLabel, L"Input: Normal (native input)");
-    }
-  }
-
-  // Owner status
-  if (mOwnerLabel) {
-    wchar_t buf[128];
-    if (ownerHwid) {
-      swprintf(buf, 128, L"Owner: 0x%X", ownerHwid);
-    } else {
-      swprintf(buf, 128, L"Owner: None (click to claim)");
-    }
-    ::SetWindowTextW(mOwnerLabel, buf);
-  }
-
-  // Update button text based on state
+  // Connect/Disconnect button
   if (connected) {
     ::SetWindowTextW(mClaimBtn, L"Disconnect");
     ::EnableWindow(mClaimBtn, TRUE);
@@ -513,6 +455,18 @@ void MouseMuxDebugDialog::UpdateStatus() {
   } else {
     ::SetWindowTextW(mClaimBtn, L"Connect");
     ::EnableWindow(mClaimBtn, TRUE);
+  }
+
+  // Capture button: only enabled when connected AND has owner
+  if (mCaptureBtn) {
+    bool canCapture = connected && hasOwner;
+    ::EnableWindow(mCaptureBtn, canCapture ? TRUE : FALSE);
+    ::SetWindowTextW(mCaptureBtn, mCaptureActive ? L"Release" : L"Capture");
+  }
+
+  // Release button: only enabled when has owner
+  if (mReleaseBtn) {
+    ::EnableWindow(mReleaseBtn, hasOwner ? TRUE : FALSE);
   }
 }
 
@@ -555,18 +509,12 @@ void MouseMuxDebugDialog::SyncPositionToFirefox() {
   RECT ffRect;
   if (!::GetWindowRect(mFirefoxHwnd, &ffRect)) return;
 
-  // Get current dialog size
-  RECT dlgRect;
-  if (!::GetWindowRect(mDialog, &dlgRect)) return;
-  int dlgWidth = dlgRect.right - dlgRect.left;
-
-  // Position dialog to the right of Firefox, matching height
+  // Position dialog to the right of Firefox, keep same size
   int x = ffRect.right;
   int y = ffRect.top;
-  int height = ffRect.bottom - ffRect.top;
 
-  ::SetWindowPos(mDialog, nullptr, x, y, dlgWidth, height,
-                 SWP_NOACTIVATE | SWP_NOZORDER);
+  ::SetWindowPos(mDialog, nullptr, x, y, 0, 0,
+                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE);
 }
 
 void MouseMuxDebugDialog::StartTrackingFirefox() {
@@ -600,6 +548,28 @@ void MouseMuxDebugDialog::ToggleCapture() {
   // Actual capture/release is handled by MouseMuxClient checking IsCaptureActive()
 }
 
+void MouseMuxDebugDialog::ReleaseOwner() {
+  if (!mClient) {
+    Log("Cannot release owner - no client");
+    return;
+  }
+  uint32_t ownerHwid = mClient->GetOwnerHwid();
+  if (!ownerHwid) {
+    Log("No owner to release");
+    return;
+  }
+
+  // If capture is active, release it first
+  if (mCaptureActive) {
+    SetCaptureActive(false);
+  }
+
+  // Clear owner on client
+  mClient->ClearOwner();
+  Log("Owner released (was 0x%X)", ownerHwid);
+  UpdateStatus();
+}
+
 LRESULT CALLBACK MouseMuxDebugDialog::FirefoxSubclassProc(
     HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
     UINT_PTR idSubclass, DWORD_PTR refData) {
@@ -625,6 +595,81 @@ LRESULT CALLBACK MouseMuxDebugDialog::FirefoxSubclassProc(
   }
 
   return ::DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+void MouseMuxDebugDialog::LoadFirefoxProfiles() {
+  mProfileNames.clear();
+  mProfilePaths.clear();
+
+  // Get %APPDATA%\Mozilla\Firefox\profiles.ini
+  wchar_t appData[MAX_PATH];
+  if (!::SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appData)) {
+    std::wstring iniPath = std::wstring(appData) + L"\\Mozilla\\Firefox\\profiles.ini";
+
+    // Read profiles.ini
+    wchar_t buf[512];
+    int profileNum = 0;
+    while (true) {
+      wchar_t section[32];
+      swprintf(section, 32, L"Profile%d", profileNum);
+
+      // Check if section exists by reading Name
+      DWORD len = ::GetPrivateProfileStringW(section, L"Name", L"", buf, 512, iniPath.c_str());
+      if (len == 0) break;
+
+      std::wstring name = buf;
+      mProfileNames.push_back(name);
+
+      // Get path
+      ::GetPrivateProfileStringW(section, L"Path", L"", buf, 512, iniPath.c_str());
+      std::wstring path = buf;
+
+      // Check if relative
+      int isRelative = ::GetPrivateProfileIntW(section, L"IsRelative", 1, iniPath.c_str());
+      if (isRelative) {
+        path = std::wstring(appData) + L"\\Mozilla\\Firefox\\" + path;
+      }
+      mProfilePaths.push_back(path);
+
+      profileNum++;
+    }
+  }
+
+  // Populate dropdown
+  if (mProfileCombo) {
+    ::SendMessageW(mProfileCombo, CB_RESETCONTENT, 0, 0);
+    for (const auto& name : mProfileNames) {
+      ::SendMessageW(mProfileCombo, CB_ADDSTRING, 0, (LPARAM)name.c_str());
+    }
+    if (!mProfileNames.empty()) {
+      ::SendMessageW(mProfileCombo, CB_SETCURSEL, 0, 0);
+    }
+  }
+}
+
+void MouseMuxDebugDialog::LaunchWithProfile(int profileIndex) {
+  if (profileIndex < 0 || profileIndex >= (int)mProfilePaths.size()) {
+    Log("Invalid profile index");
+    return;
+  }
+
+  std::wstring profilePath = mProfilePaths[profileIndex];
+  std::wstring exePath = GetExeDirectory() + L"\\firefox.exe";
+
+  // Build command line: firefox.exe -profile "path"
+  std::wstring cmdLine = L"\"" + exePath + L"\" -profile \"" + profilePath + L"\"";
+
+  STARTUPINFOW si = {sizeof(si)};
+  PROCESS_INFORMATION pi = {};
+
+  if (::CreateProcessW(nullptr, (LPWSTR)cmdLine.c_str(), nullptr, nullptr, FALSE,
+                       0, nullptr, nullptr, &si, &pi)) {
+    Log("Launched Firefox with profile: %S", mProfileNames[profileIndex].c_str());
+    ::CloseHandle(pi.hProcess);
+    ::CloseHandle(pi.hThread);
+  } else {
+    Log("Failed to launch Firefox (error %lu)", ::GetLastError());
+  }
 }
 
 }  // namespace widget
