@@ -14,7 +14,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define MOUSEMUX_CLIENT_VERSION "5.36"
+#define MOUSEMUX_CLIENT_VERSION "5.45"
 #define MOUSEMUX_SDK_VERSION "2.2.35"
 #define MOUSEMUX_BUILD_DATE __DATE__
 
@@ -187,6 +187,20 @@ void MouseMuxClient::SendReleaseCapture(uint32_t aHwid) {
            aHwid);
   SendWebSocketMessage(msg);
   Log("Sent release capture: hwid=0x%X", aHwid);
+}
+
+void MouseMuxClient::RequestCapture(uint32_t aHwid) {
+  if (!mOwnerCaptured.load()) {
+    SendCapture(aHwid, 0);
+    mOwnerCaptured.store(true);
+  }
+}
+
+void MouseMuxClient::RequestReleaseCapture(uint32_t aHwid) {
+  if (mOwnerCaptured.load()) {
+    SendReleaseCapture(aHwid);
+    mOwnerCaptured.store(false);
+  }
 }
 
 void MouseMuxClient::Disconnect() {

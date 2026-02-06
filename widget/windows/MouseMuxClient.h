@@ -66,6 +66,10 @@ class MouseMuxClient {
   uint32_t GetOwnerHwid() const { return mOwnerHwid.load(); }
   void ClearOwner() { mOwnerHwid.store(0); }
 
+  // Capture control (called from dialog)
+  void RequestCapture(uint32_t aHwid);
+  void RequestReleaseCapture(uint32_t aHwid);
+
   // Get the Firefox window this client is attached to
   HWND GetWindowHwnd() const { return mOwnerHwnd; }
 

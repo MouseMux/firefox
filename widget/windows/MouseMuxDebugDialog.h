@@ -61,6 +61,8 @@ class MouseMuxDebugDialog {
 
   HWND mDialog = nullptr;
   HWND mProfileCombo = nullptr;    // Profile dropdown
+  HWND mLaunchBtn = nullptr;       // Launch profile button
+  HWND mProfileHintLabel = nullptr; // Multi-seat explanation
   HWND mStatusLabel = nullptr;     // Status with colored bullet
   HWND mClaimBtn = nullptr;        // Connect button
   HWND mCaptureBtn = nullptr;      // Capture toggle button
@@ -87,6 +89,7 @@ class MouseMuxDebugDialog {
 
   enum {
     ID_PROFILE_COMBO = 100,
+    ID_LAUNCH,
     ID_STATUS,
     ID_CLAIM,
     ID_CAPTURE_BTN,

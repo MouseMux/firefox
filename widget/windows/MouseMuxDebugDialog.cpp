@@ -18,7 +18,7 @@
 
 #define SUBCLASS_ID 1001
 
-#define MOUSEMUX_VERSION "5.38"
+#define MOUSEMUX_VERSION "5.45"
 
 namespace mozilla {
 namespace widget {
@@ -112,8 +112,10 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
 
   // Only close button in title bar (no minimize/maximize), keep icon
   DWORD style = WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_MINIMIZEBOX & ~WS_THICKFRAME;
+  wchar_t titleBuf[64];
+  swprintf(titleBuf, 64, L"MouseMux v%S", MOUSEMUX_VERSION);
   mDialog = ::CreateWindowExW(
-      WS_EX_APPWINDOW, L"MouseMuxOwnerDialog", L"MouseMux",
+      WS_EX_APPWINDOW, L"MouseMuxOwnerDialog", titleBuf,
       style | WS_VISIBLE,
       x, y, width, height,
       nullptr,  // No owner - allows taskbar entry
@@ -139,14 +141,42 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
-  // Profile dropdown
+  // Top row: [Profile dropdown (60%)] [Launch (20%)] [Hide (20%)]
+  int gap = 5;
+  int profileWidth = (int)(ctrlWidth * 0.60);
+  int launchWidth = (int)(ctrlWidth * 0.20) - gap;
+  int hideWidth = ctrlWidth - profileWidth - launchWidth - 2 * gap;
+
   mProfileCombo = ::CreateWindowW(L"COMBOBOX", nullptr,
                                    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                   margin, contentY, ctrlWidth, 200,
+                                   margin, contentY, profileWidth, 200,
                                    mDialog, (HMENU)ID_PROFILE_COMBO, nullptr, nullptr);
   ::SendMessage(mProfileCombo, WM_SETFONT, (WPARAM)largeFont, TRUE);
   LoadFirefoxProfiles();
+
+  mLaunchBtn = ::CreateWindowW(L"BUTTON", L"Launch",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                margin + profileWidth + gap, contentY, launchWidth, 32,
+                                mDialog, (HMENU)ID_LAUNCH, nullptr, nullptr);
+  ::SendMessage(mLaunchBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+
+  mHideBtn = ::CreateWindowW(L"BUTTON", L"Hide",
+                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                              margin + profileWidth + gap + launchWidth + gap, contentY, hideWidth, 32,
+                              mDialog, (HMENU)ID_HIDE, nullptr, nullptr);
+  ::SendMessage(mHideBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
   contentY += 38;
+
+  // Profile hint label
+  mProfileHintLabel = ::CreateWindowW(L"STATIC",
+                                       L"Launch another Firefox for multi-seat setup",
+                                       WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                       margin, contentY, ctrlWidth, 20, mDialog, nullptr, nullptr, nullptr);
+  HFONT smallFont = ::CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                   CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+  ::SendMessage(mProfileHintLabel, WM_SETFONT, (WPARAM)smallFont, TRUE);
+  contentY += 26;
 
   // Connect button
   mClaimBtn = ::CreateWindowW(L"BUTTON", L"Connect",
@@ -162,25 +192,27 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   ::SendMessage(mStatusLabel, WM_SETFONT, (WPARAM)largeFont, TRUE);
   contentY += 32;
 
-  // Row 1: [Capture] [Hotkey dropdown] - each half width
-  int gap = 5;
-  int halfWidth = (ctrlWidth - gap) / 2;
-  mCaptureBtn = ::CreateWindowW(L"BUTTON", L"Capture",
+  // Row: [Capture Mouse] - full width
+  mCaptureBtn = ::CreateWindowW(L"BUTTON", L"Capture Mouse",
                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
-                                 margin, contentY, halfWidth, 32, mDialog, (HMENU)ID_CAPTURE_BTN, nullptr, nullptr);
+                                 margin, contentY, ctrlWidth, 32, mDialog, (HMENU)ID_CAPTURE_BTN, nullptr, nullptr);
   ::SendMessage(mCaptureBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  contentY += 38;
+
+  // Row: [Hotkey dropdown (1/3)] [Release Owner (2/3)]
+  int thirdWidth = (ctrlWidth - gap) / 3;
+  int twoThirdsWidth = ctrlWidth - thirdWidth - gap;
 
   mHotkeyCombo = ::CreateWindowW(L"COMBOBOX", nullptr,
                                   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                  margin + halfWidth + gap, contentY, halfWidth, 200,
+                                  margin, contentY, thirdWidth, 200,
                                   mDialog, (HMENU)ID_HOTKEY_COMBO, nullptr, nullptr);
   ::SendMessage(mHotkeyCombo, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += 38;
 
-  // Row 2: [Release Owner] - full width
   mReleaseBtn = ::CreateWindowW(L"BUTTON", L"Release Owner",
                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
-                                 margin, contentY, ctrlWidth, 32, mDialog, (HMENU)ID_RELEASE_BTN, nullptr, nullptr);
+                                 margin + thirdWidth + gap, contentY, twoThirdsWidth, 32,
+                                 mDialog, (HMENU)ID_RELEASE_BTN, nullptr, nullptr);
   ::SendMessage(mReleaseBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
 
   // Populate hotkey dropdown
@@ -205,14 +237,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
       WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
       margin, contentY, ctrlWidth, logHeight, mDialog, (HMENU)ID_LOG, nullptr, nullptr);
   ::SendMessage(mLogEdit, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += logHeight + 10;
-
-  // Minimize button at bottom
-  mHideBtn = ::CreateWindowW(L"BUTTON", L"Minimize",
-                             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                             margin, contentY, ctrlWidth, 32, mDialog, (HMENU)ID_HIDE, nullptr, nullptr);
-  ::SendMessage(mHideBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
-  contentY += 32 + 15;
+  contentY += logHeight + 15;
 
   // Resize dialog to fit content (contentY + title bar + border)
   int finalHeight = contentY + 45;
@@ -285,18 +310,31 @@ LRESULT MouseMuxDebugDialog::HandleMessage(UINT msg, WPARAM wParam, LPARAM lPara
       switch (LOWORD(wParam)) {
         case ID_CLAIM: OnClaimWindow(); return 0;
         case ID_HIDE: Hide(); return 0;
+        case ID_LAUNCH: {
+          int sel = (int)::SendMessage(mProfileCombo, CB_GETCURSEL, 0, 0);
+          if (sel >= 0) {
+            LaunchWithProfile(sel);
+          }
+          return 0;
+        }
         case ID_CAPTURE_BTN:
-          // Only handle via WM_COMMAND when no owner (native clicks work)
-          // When there's an owner, MouseMuxClient handles button clicks
-          if (mClient && mClient->GetOwnerHwid() == 0) {
+          // Handle capture toggle and sync with server
+          if (mClient) {
+            Log("RELEASE-SOURCE: Capture button clicked");
             ToggleCapture();
+            // Sync capture state with server
+            uint32_t owner = mClient->GetOwnerHwid();
+            if (owner != 0) {
+              if (mCaptureActive) {
+                mClient->RequestCapture(owner);
+              } else {
+                mClient->RequestReleaseCapture(owner);
+              }
+            }
           }
           return 0;
         case ID_RELEASE_BTN:
-          // Only handle via WM_COMMAND when no owner
-          if (mClient && mClient->GetOwnerHwid() == 0) {
-            ReleaseOwner();
-          }
+          ReleaseOwner();
           return 0;
         case ID_HOTKEY_COMBO:
           if (HIWORD(wParam) == CBN_SELCHANGE) {
@@ -461,7 +499,7 @@ void MouseMuxDebugDialog::UpdateStatus() {
   if (mCaptureBtn) {
     bool canCapture = connected && hasOwner;
     ::EnableWindow(mCaptureBtn, canCapture ? TRUE : FALSE);
-    ::SetWindowTextW(mCaptureBtn, mCaptureActive ? L"Release" : L"Capture");
+    ::SetWindowTextW(mCaptureBtn, mCaptureActive ? L"Release Capture" : L"Capture Mouse");
   }
 
   // Release button: only enabled when has owner
@@ -534,7 +572,7 @@ void MouseMuxDebugDialog::StopTrackingFirefox() {
 void MouseMuxDebugDialog::SetCaptureActive(bool aActive) {
   mCaptureActive = aActive;
   if (mCaptureBtn) {
-    ::SetWindowTextW(mCaptureBtn, aActive ? L"Release" : L"Capture");
+    ::SetWindowTextW(mCaptureBtn, aActive ? L"Release Capture" : L"Capture Mouse");
   }
   Log("Capture %s", aActive ? "ACTIVE" : "released");
 }
@@ -559,8 +597,10 @@ void MouseMuxDebugDialog::ReleaseOwner() {
     return;
   }
 
-  // If capture is active, release it first
+  // If capture is active, release it first (both UI and server)
   if (mCaptureActive) {
+    Log("RELEASE-SOURCE: ReleaseOwner() releasing capture first");
+    mClient->RequestReleaseCapture(ownerHwid);
     SetCaptureActive(false);
   }
 
@@ -582,6 +622,16 @@ LRESULT CALLBACK MouseMuxDebugDialog::FirefoxSubclassProc(
       // Firefox moved or resized - sync our position
       if (self && self->mVisible) {
         self->SyncPositionToFirefox();
+      }
+      break;
+
+    case WM_ACTIVATE:
+      // Firefox activated (e.g., taskbar click) - also show/activate dialog
+      if (LOWORD(wParam) != WA_INACTIVE && self && self->mVisible && self->mDialog) {
+        // Position dialog next to Firefox and bring to front
+        self->SyncPositionToFirefox();
+        ::SetWindowPos(self->mDialog, hwnd, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
       }
       break;
 
