@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <atomic>
 
 namespace mozilla {
 namespace widget {
@@ -20,6 +21,7 @@ class MouseMuxDebugDialog {
  public:
   static MouseMuxDebugDialog* GetInstance();
   static void Shutdown();
+  static bool IsInstanceValid();  // Thread-safe check if instance exists
 
   void Show();
   void Hide();
@@ -41,7 +43,7 @@ class MouseMuxDebugDialog {
 
   void CreateDialogWindow();
   static LRESULT CALLBACK DialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-  LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
+  LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
   void OnClaimWindow();
   void UpdateStatus();
@@ -56,6 +58,10 @@ class MouseMuxDebugDialog {
                                                DWORD_PTR refData);
 
   static MouseMuxDebugDialog* sInstance;
+  static std::mutex sInstanceMutex;
+  static std::atomic<bool> sInstanceValid;
+
+  std::mutex mMemberMutex;  // Protects member access from worker threads
   MouseMuxClient* mClient = nullptr;
   HWND mFirefoxHwnd = nullptr;       // Firefox window we're docked to
 
@@ -70,6 +76,10 @@ class MouseMuxDebugDialog {
   HWND mReleaseBtn = nullptr;      // Release owner button
   HWND mLogEdit = nullptr;         // Log output
   HWND mHideBtn = nullptr;         // Minimize button
+
+  HFONT mTextFont = nullptr;
+  HFONT mBtnFont = nullptr;
+  HFONT mGroupFont = nullptr;
 
   bool mVisible = false;
   bool mCaptureActive = false;     // Capture currently active

@@ -14,7 +14,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define MOUSEMUX_CLIENT_VERSION "5.51"
+#define MOUSEMUX_CLIENT_VERSION "5.52"
 #define MOUSEMUX_SDK_VERSION "2.2.35"
 #define MOUSEMUX_BUILD_DATE __DATE__
 
@@ -204,12 +204,13 @@ void MouseMuxClient::RequestReleaseCapture(uint32_t aHwid) {
 }
 
 void MouseMuxClient::Disconnect() {
-  // Release capture if active
+  // Release capture and owner
   uint32_t owner = mOwnerHwid.load();
   if (mOwnerCaptured.load() && owner != 0) {
     SendReleaseCapture(owner);
     mOwnerCaptured.store(false);
   }
+  mOwnerHwid.store(0);
   mOwnerInWindow.store(false);
 
   // Send logout and wait for server to process before closing
@@ -231,9 +232,21 @@ void MouseMuxClient::Disconnect() {
     }
   }
 
-  // Don't join here - would block UI. Thread will exit on its own.
+  // Wait briefly for thread to exit, then detach if still running
   if (mWorkerThread.joinable()) {
-    mWorkerThread.detach();
+    auto start = std::chrono::steady_clock::now();
+    while (mThreadRunning.load()) {
+      auto elapsed = std::chrono::steady_clock::now() - start;
+      if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > 200) {
+        // Thread taking too long, detach to avoid blocking UI
+        mWorkerThread.detach();
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (mWorkerThread.joinable()) {
+      mWorkerThread.join();
+    }
   }
 
   UpdateDebugStatusSafe();
@@ -478,6 +491,9 @@ void MouseMuxClient::WebSocketThread() {
 }
 
 void MouseMuxClient::UpdateDebugStatusSafe() {
+  // Thread-safe check before accessing singleton
+  if (!MouseMuxDebugDialog::IsInstanceValid()) return;
+
   auto* dlg = MouseMuxDebugDialog::GetInstance();
   if (dlg && dlg->IsVisible()) {
     HWND hwnd = dlg->GetDialogHwnd();
@@ -866,7 +882,7 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
   bool isKeyUp = (aMessage == WM_KEYUP || aMessage == WM_SYSKEYUP);
 
   // Check for capture hotkey (only on keydown)
-  if (isKeyDown) {
+  if (isKeyDown && MouseMuxDebugDialog::IsInstanceValid()) {
     auto* dlg = MouseMuxDebugDialog::GetInstance();
     if (dlg) {
       uint8_t hotkey = dlg->GetCaptureHotkey();
@@ -950,14 +966,19 @@ void MouseMuxClient::Log(const char* aFormat, ...) {
 void MouseMuxClient::ShowDebugDialog() {
   // Use the new singleton debug dialog
   auto* dialog = MouseMuxDebugDialog::GetInstance();
-  dialog->SetClient(this);
-  dialog->Show();
-  mDebugDialogVisible = true;
+  if (dialog) {
+    dialog->SetClient(this);
+    dialog->Show();
+    mDebugDialogVisible = true;
+  }
 }
 
 void MouseMuxClient::HideDebugDialog() {
+  if (!MouseMuxDebugDialog::IsInstanceValid()) return;
   auto* dialog = MouseMuxDebugDialog::GetInstance();
-  dialog->Hide();
+  if (dialog) {
+    dialog->Hide();
+  }
   mDebugDialogVisible = false;
 }
 

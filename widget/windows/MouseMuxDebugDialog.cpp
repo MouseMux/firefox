@@ -18,21 +18,31 @@
 
 #define SUBCLASS_ID 1001
 
-#define MOUSEMUX_VERSION "5.51"
+#define MOUSEMUX_VERSION "5.52"
 
 namespace mozilla {
 namespace widget {
 
 MouseMuxDebugDialog* MouseMuxDebugDialog::sInstance = nullptr;
+std::mutex MouseMuxDebugDialog::sInstanceMutex;
+std::atomic<bool> MouseMuxDebugDialog::sInstanceValid{false};
 
 MouseMuxDebugDialog* MouseMuxDebugDialog::GetInstance() {
+  std::lock_guard<std::mutex> lock(sInstanceMutex);
   if (!sInstance) {
     sInstance = new MouseMuxDebugDialog();
+    sInstanceValid.store(true);
   }
   return sInstance;
 }
 
+bool MouseMuxDebugDialog::IsInstanceValid() {
+  return sInstanceValid.load();
+}
+
 void MouseMuxDebugDialog::Shutdown() {
+  std::lock_guard<std::mutex> lock(sInstanceMutex);
+  sInstanceValid.store(false);
   if (sInstance) {
     sInstance->Hide();
     delete sInstance;
@@ -64,6 +74,10 @@ MouseMuxDebugDialog::~MouseMuxDebugDialog() {
     ::DestroyWindow(mDialog);
     mDialog = nullptr;
   }
+  // Clean up fonts
+  if (mTextFont) ::DeleteObject(mTextFont);
+  if (mBtnFont) ::DeleteObject(mBtnFont);
+  if (mGroupFont) ::DeleteObject(mGroupFont);
 }
 
 std::wstring MouseMuxDebugDialog::GetExeDirectory() {
@@ -88,16 +102,20 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   HICON hIconSmall = (HICON)::LoadImageW(nullptr, iconPath.c_str(), IMAGE_ICON,
                                           16, 16, LR_LOADFROMFILE);
 
-  WNDCLASSEXW wc = {0};
-  wc.cbSize = sizeof(wc);
-  wc.lpfnWndProc = DialogProc;
-  wc.hInstance = ::GetModuleHandle(nullptr);
-  wc.hCursor = ::LoadCursor(nullptr, IDC_ARROW);
-  wc.hbrBackground = whiteBrush;
-  wc.lpszClassName = L"MouseMuxOwnerDialog";
-  wc.hIcon = hIcon;
-  wc.hIconSm = hIconSmall;
-  ::RegisterClassExW(&wc);
+  static bool sClassRegistered = false;
+  if (!sClassRegistered) {
+    WNDCLASSEXW wc = {0};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = DialogProc;
+    wc.hInstance = ::GetModuleHandle(nullptr);
+    wc.hCursor = ::LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = whiteBrush;
+    wc.lpszClassName = L"MouseMuxOwnerDialog";
+    wc.hIcon = hIcon;
+    wc.hIconSm = hIconSmall;
+    ::RegisterClassExW(&wc);
+    sClassRegistered = true;
+  }
 
   // Calculate initial position docked to Firefox
   int x = 100, y = 100;
@@ -136,16 +154,16 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   int innerMargin = 15;  // Margin inside groupboxes
   int innerWidth = ctrlWidth - 2 * innerMargin + 10;
 
-  // Create fonts
-  HFONT textFont = ::CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-  HFONT btnFont = ::CreateFontW(22, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-  HFONT groupFont = ::CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                   CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+  // Create fonts (stored as members, cleaned up in destructor)
+  mTextFont = ::CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+  mBtnFont = ::CreateFontW(22, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+  mGroupFont = ::CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
   // ========== SECTION 1: Connect (GroupBox) ==========
   int connectSectionStart = contentY;
@@ -156,7 +174,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                               margin + innerMargin, connectInnerY, innerWidth, 32,
                               mDialog, (HMENU)ID_CLAIM, nullptr, nullptr);
-  ::SendMessage(mClaimBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  ::SendMessage(mClaimBtn, WM_SETFONT, (WPARAM)mBtnFont, TRUE);
   connectInnerY += 38;
 
   // Status line
@@ -164,7 +182,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                  WS_CHILD | WS_VISIBLE | SS_LEFT,
                                  margin + innerMargin, connectInnerY, innerWidth, 24,
                                  mDialog, (HMENU)ID_STATUS, nullptr, nullptr);
-  ::SendMessage(mStatusLabel, WM_SETFONT, (WPARAM)textFont, TRUE);
+  ::SendMessage(mStatusLabel, WM_SETFONT, (WPARAM)mTextFont, TRUE);
   connectInnerY += 28;
 
   // Log area
@@ -174,7 +192,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
       WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
       margin + innerMargin, connectInnerY, innerWidth, logHeight,
       mDialog, (HMENU)ID_LOG, nullptr, nullptr);
-  ::SendMessage(mLogEdit, WM_SETFONT, (WPARAM)textFont, TRUE);
+  ::SendMessage(mLogEdit, WM_SETFONT, (WPARAM)mTextFont, TRUE);
   connectInnerY += logHeight + 8;
 
   // Release Owner button
@@ -182,7 +200,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
                                  margin + innerMargin, connectInnerY, innerWidth, 32,
                                  mDialog, (HMENU)ID_RELEASE_BTN, nullptr, nullptr);
-  ::SendMessage(mReleaseBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  ::SendMessage(mReleaseBtn, WM_SETFONT, (WPARAM)mBtnFont, TRUE);
   connectInnerY += 38;
 
   // Create Connect groupbox frame
@@ -191,7 +209,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
                                        margin, connectSectionStart, ctrlWidth, connectSectionHeight,
                                        mDialog, nullptr, nullptr, nullptr);
-  ::SendMessage(connectGroup, WM_SETFONT, (WPARAM)groupFont, TRUE);
+  ::SendMessage(connectGroup, WM_SETFONT, (WPARAM)mGroupFont, TRUE);
   contentY = connectInnerY + 15;
 
   // ========== SECTION 2: Capture (GroupBox) ==========
@@ -204,7 +222,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
       WS_CHILD | WS_VISIBLE | SS_LEFT,
       margin + innerMargin, captureInnerY, innerWidth, 44,
       mDialog, nullptr, nullptr, nullptr);
-  ::SendMessage(captureText, WM_SETFONT, (WPARAM)textFont, TRUE);
+  ::SendMessage(captureText, WM_SETFONT, (WPARAM)mTextFont, TRUE);
   captureInnerY += 48;
 
   // Row: [Capture Mouse (2/3)] [Hotkey dropdown (1/3)]
@@ -215,13 +233,13 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
                                  margin + innerMargin, captureInnerY, twoThirdsWidth, 32,
                                  mDialog, (HMENU)ID_CAPTURE_BTN, nullptr, nullptr);
-  ::SendMessage(mCaptureBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  ::SendMessage(mCaptureBtn, WM_SETFONT, (WPARAM)mBtnFont, TRUE);
 
   mHotkeyCombo = ::CreateWindowW(L"COMBOBOX", nullptr,
                                   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
                                   margin + innerMargin + twoThirdsWidth + gap, captureInnerY, thirdWidth, 200,
                                   mDialog, (HMENU)ID_HOTKEY_COMBO, nullptr, nullptr);
-  ::SendMessage(mHotkeyCombo, WM_SETFONT, (WPARAM)textFont, TRUE);
+  ::SendMessage(mHotkeyCombo, WM_SETFONT, (WPARAM)mTextFont, TRUE);
 
   // Populate hotkey dropdown
   const wchar_t* hotkeyOptions[] = {
@@ -244,7 +262,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
                                        margin, captureSectionStart, ctrlWidth, captureSectionHeight,
                                        mDialog, nullptr, nullptr, nullptr);
-  ::SendMessage(captureGroup, WM_SETFONT, (WPARAM)groupFont, TRUE);
+  ::SendMessage(captureGroup, WM_SETFONT, (WPARAM)mGroupFont, TRUE);
   contentY = captureInnerY + 15;
 
   // ========== SECTION 3: Multi-seat (GroupBox) ==========
@@ -257,7 +275,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
       WS_CHILD | WS_VISIBLE | SS_LEFT,
       margin + innerMargin, multiInnerY, innerWidth, 24,
       mDialog, nullptr, nullptr, nullptr);
-  ::SendMessage(mProfileHintLabel, WM_SETFONT, (WPARAM)textFont, TRUE);
+  ::SendMessage(mProfileHintLabel, WM_SETFONT, (WPARAM)mTextFont, TRUE);
   multiInnerY += 28;
 
   // Profile dropdown
@@ -265,7 +283,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
                                    margin + innerMargin, multiInnerY, innerWidth, 200,
                                    mDialog, (HMENU)ID_PROFILE_COMBO, nullptr, nullptr);
-  ::SendMessage(mProfileCombo, WM_SETFONT, (WPARAM)textFont, TRUE);
+  ::SendMessage(mProfileCombo, WM_SETFONT, (WPARAM)mTextFont, TRUE);
   LoadFirefoxProfiles();
   multiInnerY += 34;
 
@@ -274,7 +292,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                 margin + innerMargin, multiInnerY, innerWidth, 32,
                                 mDialog, (HMENU)ID_LAUNCH, nullptr, nullptr);
-  ::SendMessage(mLaunchBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  ::SendMessage(mLaunchBtn, WM_SETFONT, (WPARAM)mBtnFont, TRUE);
   multiInnerY += 38;
 
   // Create Multi-seat groupbox frame
@@ -283,7 +301,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                                      WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
                                      margin, multiSectionStart, ctrlWidth, multiSectionHeight,
                                      mDialog, nullptr, nullptr, nullptr);
-  ::SendMessage(multiGroup, WM_SETFONT, (WPARAM)groupFont, TRUE);
+  ::SendMessage(multiGroup, WM_SETFONT, (WPARAM)mGroupFont, TRUE);
   contentY = multiInnerY + 15;
 
   // ========== BOTTOM: Hide button (no frame) ==========
@@ -291,7 +309,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                               margin, contentY, ctrlWidth, 32,
                               mDialog, (HMENU)ID_HIDE, nullptr, nullptr);
-  ::SendMessage(mHideBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  ::SendMessage(mHideBtn, WM_SETFONT, (WPARAM)mBtnFont, TRUE);
   contentY += 45;
 
   // Resize dialog to fit content (contentY + title bar + border)
@@ -344,12 +362,12 @@ LRESULT CALLBACK MouseMuxDebugDialog::DialogProc(HWND hwnd, UINT msg, WPARAM wPa
   }
 
   if (self) {
-    return self->HandleMessage(msg, wParam, lParam);
+    return self->HandleMessage(hwnd, msg, wParam, lParam);
   }
   return ::DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-LRESULT MouseMuxDebugDialog::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
+LRESULT MouseMuxDebugDialog::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_MOUSEMUX_UPDATE:
       UpdateStatus();
@@ -460,7 +478,7 @@ LRESULT MouseMuxDebugDialog::HandleMessage(UINT msg, WPARAM wParam, LPARAM lPara
       mDialog = nullptr;
       return 0;
   }
-  return ::DefWindowProc(mDialog, msg, wParam, lParam);
+  return ::DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 void MouseMuxDebugDialog::OnClaimWindow() {
@@ -668,21 +686,30 @@ void MouseMuxDebugDialog::ReleaseOwner() {
 LRESULT CALLBACK MouseMuxDebugDialog::FirefoxSubclassProc(
     HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
     UINT_PTR idSubclass, DWORD_PTR refData) {
+  // Check if instance is still valid before accessing
+  if (!IsInstanceValid()) {
+    ::RemoveWindowSubclass(hwnd, FirefoxSubclassProc, idSubclass);
+    return ::DefSubclassProc(hwnd, msg, wParam, lParam);
+  }
+
   MouseMuxDebugDialog* self = (MouseMuxDebugDialog*)refData;
+  if (!self) {
+    return ::DefSubclassProc(hwnd, msg, wParam, lParam);
+  }
 
   switch (msg) {
     case WM_WINDOWPOSCHANGED:
     case WM_MOVE:
     case WM_SIZE:
       // Firefox moved or resized - sync our position
-      if (self && self->mVisible) {
+      if (self->mVisible) {
         self->SyncPositionToFirefox();
       }
       break;
 
     case WM_ACTIVATE:
       // Firefox activated (e.g., taskbar click) - also show/activate dialog
-      if (LOWORD(wParam) != WA_INACTIVE && self && self->mVisible && self->mDialog) {
+      if (LOWORD(wParam) != WA_INACTIVE && self->mVisible && self->mDialog) {
         // Position dialog next to Firefox and bring to front
         self->SyncPositionToFirefox();
         ::SetWindowPos(self->mDialog, hwnd, 0, 0, 0, 0,
@@ -693,9 +720,7 @@ LRESULT CALLBACK MouseMuxDebugDialog::FirefoxSubclassProc(
     case WM_DESTROY:
       // Firefox window is being destroyed - clean up
       ::RemoveWindowSubclass(hwnd, FirefoxSubclassProc, idSubclass);
-      if (self) {
-        self->mFirefoxHwnd = nullptr;
-      }
+      self->mFirefoxHwnd = nullptr;
       break;
   }
 
