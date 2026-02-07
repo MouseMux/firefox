@@ -14,7 +14,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define MOUSEMUX_CLIENT_VERSION "5.45"
+#define MOUSEMUX_CLIENT_VERSION "5.46"
 #define MOUSEMUX_SDK_VERSION "2.2.35"
 #define MOUSEMUX_BUILD_DATE __DATE__
 
@@ -701,20 +701,9 @@ void MouseMuxClient::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScre
         motionCount, aHwid, aScreenX, aScreenY, owner, isOwner, inWindow);
   }
 
-  // Track owner in/out transitions and sync capture state
+  // Track owner in/out of window (for status display only)
   if (isOwner) {
     mOwnerInWindow.store(inWindow);
-    auto* dlg = MouseMuxDebugDialog::GetInstance();
-    bool shouldCapture = dlg && dlg->IsCaptureActive() && inWindow;
-    bool isCaptured = mOwnerCaptured.load();
-
-    if (shouldCapture && !isCaptured) {
-      SendCapture(aHwid, 0);
-      mOwnerCaptured.store(true);
-    } else if (!shouldCapture && isCaptured) {
-      SendReleaseCapture(aHwid);
-      mOwnerCaptured.store(false);
-    }
   }
 
   // Update hover info on debug dialog for any mouse
@@ -821,72 +810,39 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
   bool isOwner = (aHwid == owner);
   bool inWindow = IsPointInWindow(aScreenX, aScreenY);
 
-  // Check if click is on the debug dialog - handle via MouseMux since
-  // native input may be blocked/intercepted when connected
-  if (leftDown && isOwner) {
+  // Owner is only cleared via Release Owner button - not when clicking outside
+
+  // Handle owner clicks on the debug dialog (owner's native input is captured by MouseMux)
+  // Also eat leftUp on dialog to prevent native button click after InputFilter is disabled
+  if ((leftDown || leftUp) && isOwner) {
     auto* dlg = MouseMuxDebugDialog::GetInstance();
     if (dlg && dlg->IsVisible()) {
-      POINT pt = {aScreenX, aScreenY};
       HWND dialogHwnd = dlg->GetDialogHwnd();
-
-      // Check if click is anywhere on the dialog
       if (dialogHwnd && ::IsWindow(dialogHwnd)) {
         RECT dlgRect;
+        POINT pt = {aScreenX, aScreenY};
         if (::GetWindowRect(dialogHwnd, &dlgRect) && ::PtInRect(&dlgRect, pt)) {
-          // Click is on dialog - check specific buttons
-
-          // Capture button
-          HWND captureBtn = dlg->GetCaptureButtonHwnd();
-          if (captureBtn && ::IsWindow(captureBtn) && ::IsWindowEnabled(captureBtn)) {
-            RECT btnRect;
-            if (::GetWindowRect(captureBtn, &btnRect) && ::PtInRect(&btnRect, pt)) {
-              Log("Click on Capture button");
-              dlg->ToggleCapture();
-              if (dlg->IsCaptureActive() && !mOwnerCaptured.load()) {
-                SendCapture(aHwid, 0);
-                mOwnerCaptured.store(true);
-              } else if (!dlg->IsCaptureActive() && mOwnerCaptured.load()) {
-                SendReleaseCapture(aHwid);
-                mOwnerCaptured.store(false);
+          if (leftDown) {
+            // Owner clicked on dialog - simulate native button click
+            POINT clientPt = pt;
+            ::ScreenToClient(dialogHwnd, &clientPt);
+            HWND child = ::ChildWindowFromPoint(dialogHwnd, clientPt);
+            if (child && child != dialogHwnd) {
+              int ctrlId = ::GetDlgCtrlID(child);
+              if (ctrlId != 0 && ::IsWindowEnabled(child)) {
+                Log("Owner click on dialog control id=%d", ctrlId);
+                ::PostMessage(dialogHwnd, WM_COMMAND, MAKEWPARAM(ctrlId, BN_CLICKED), (LPARAM)child);
               }
-              return;
             }
           }
-
-          // Release button
-          HWND releaseBtn = dlg->GetReleaseButtonHwnd();
-          if (releaseBtn && ::IsWindow(releaseBtn) && ::IsWindowEnabled(releaseBtn)) {
-            RECT btnRect;
-            if (::GetWindowRect(releaseBtn, &btnRect) && ::PtInRect(&btnRect, pt)) {
-              Log("Click on Release button");
-              dlg->ReleaseOwner();
-              return;
-            }
-          }
-
-          // Click was on dialog but not on a handled button - ignore
-          // (don't process as Firefox click)
+          // Eat both down and up to prevent native double-click after disconnect
           return;
         }
       }
     }
   }
 
-  // Release ownership if user clicked outside this window
-  if (isButtonDown && !inWindow && isOwner) {
-    // Release capture if active
-    if (mOwnerCaptured.load()) {
-      SendReleaseCapture(aHwid);
-      mOwnerCaptured.store(false);
-    }
-    mOwnerInWindow.store(false);
-    mOwnerHwid.store(0);
-    Log("Released owner: hwid=0x%X (clicked outside)", aHwid);
-    UpdateDebugStatusSafe();
-    return;
-  }
-
-  // Only allow setting owner if there's no current owner (lock ownership)
+  // Set owner on first click inside window (if no current owner)
   if (isButtonDown && inWindow && owner == 0) {
     mOwnerHwid.store(aHwid);
     Log("New owner: hwid=0x%X (locked)", aHwid);
@@ -1043,14 +999,11 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
       if (aVkey == hotkey && shiftHeld == needShift) {
         Log("Capture hotkey pressed (vk=0x%X shift=%d)", hotkey, needShift);
         dlg->ToggleCapture();
-        // Sync capture state immediately
-        bool shouldCapture = dlg->IsCaptureActive() && mOwnerInWindow.load();
-        if (shouldCapture && !mOwnerCaptured.load()) {
-          SendCapture(owner, 0);
-          mOwnerCaptured.store(true);
-        } else if (!shouldCapture && mOwnerCaptured.load()) {
-          SendReleaseCapture(owner);
-          mOwnerCaptured.store(false);
+        // Sync capture state with server
+        if (dlg->IsCaptureActive()) {
+          RequestCapture(owner);
+        } else {
+          RequestReleaseCapture(owner);
         }
         return;  // Don't dispatch hotkey to Firefox
       }

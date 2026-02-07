@@ -18,7 +18,7 @@
 
 #define SUBCLASS_ID 1001
 
-#define MOUSEMUX_VERSION "5.45"
+#define MOUSEMUX_VERSION "5.46"
 
 namespace mozilla {
 namespace widget {
