@@ -18,7 +18,7 @@
 
 #define SUBCLASS_ID 1001
 
-#define MOUSEMUX_VERSION "5.48"
+#define MOUSEMUX_VERSION "5.50"
 
 namespace mozilla {
 namespace widget {
@@ -132,88 +132,96 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   int contentY = 10;
   int margin = 10;
   int ctrlWidth = width - 2 * margin - 20;  // Account for window borders
+  int gap = 5;
+  int innerMargin = 15;  // Margin inside groupboxes
+  int innerWidth = ctrlWidth - 2 * innerMargin + 10;
 
   // Create fonts
-  HFONT largeFont = ::CreateFontW(25, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                   CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-  HFONT btnFont = ::CreateFontW(25, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+  HFONT textFont = ::CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+  HFONT btnFont = ::CreateFontW(22, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-
-  // Top row: [Profile dropdown (60%)] [Launch (20%)] [Hide (20%)]
-  int gap = 5;
-  int profileWidth = (int)(ctrlWidth * 0.60);
-  int launchWidth = (int)(ctrlWidth * 0.20) - gap;
-  int hideWidth = ctrlWidth - profileWidth - launchWidth - 2 * gap;
-
-  mProfileCombo = ::CreateWindowW(L"COMBOBOX", nullptr,
-                                   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                   margin, contentY, profileWidth, 200,
-                                   mDialog, (HMENU)ID_PROFILE_COMBO, nullptr, nullptr);
-  ::SendMessage(mProfileCombo, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  LoadFirefoxProfiles();
-
-  mLaunchBtn = ::CreateWindowW(L"BUTTON", L"Launch",
-                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                margin + profileWidth + gap, contentY, launchWidth, 32,
-                                mDialog, (HMENU)ID_LAUNCH, nullptr, nullptr);
-  ::SendMessage(mLaunchBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
-
-  mHideBtn = ::CreateWindowW(L"BUTTON", L"Hide",
-                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                              margin + profileWidth + gap + launchWidth + gap, contentY, hideWidth, 32,
-                              mDialog, (HMENU)ID_HIDE, nullptr, nullptr);
-  ::SendMessage(mHideBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
-  contentY += 38;
-
-  // Profile hint label
-  mProfileHintLabel = ::CreateWindowW(L"STATIC",
-                                       L"Launch another Firefox for multi-seat setup",
-                                       WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                       margin, contentY, ctrlWidth, 20, mDialog, nullptr, nullptr, nullptr);
-  HFONT smallFont = ::CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+  HFONT groupFont = ::CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-  ::SendMessage(mProfileHintLabel, WM_SETFONT, (WPARAM)smallFont, TRUE);
-  contentY += 26;
+
+  // ========== SECTION 1: Connect (GroupBox) ==========
+  int connectSectionStart = contentY;
+  int connectInnerY = contentY + 20;  // After groupbox title
 
   // Connect button
   mClaimBtn = ::CreateWindowW(L"BUTTON", L"Connect",
                               WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                              margin, contentY, ctrlWidth, 32, mDialog, (HMENU)ID_CLAIM, nullptr, nullptr);
+                              margin + innerMargin, connectInnerY, innerWidth, 32,
+                              mDialog, (HMENU)ID_CLAIM, nullptr, nullptr);
   ::SendMessage(mClaimBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
-  contentY += 38;
+  connectInnerY += 38;
 
-  // Status line with colored bullet: "● Disconnected" or "● Connected | Owner: 0x1234"
+  // Status line
   mStatusLabel = ::CreateWindowW(L"STATIC", L"\u25CF Disconnected",
                                  WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                 margin, contentY, ctrlWidth, 28, mDialog, (HMENU)ID_STATUS, nullptr, nullptr);
-  ::SendMessage(mStatusLabel, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += 32;
+                                 margin + innerMargin, connectInnerY, innerWidth, 24,
+                                 mDialog, (HMENU)ID_STATUS, nullptr, nullptr);
+  ::SendMessage(mStatusLabel, WM_SETFONT, (WPARAM)textFont, TRUE);
+  connectInnerY += 28;
 
-  // Row: [Capture Mouse] - full width
+  // Log area
+  int logHeight = 120;
+  mLogEdit = ::CreateWindowExW(
+      WS_EX_CLIENTEDGE, L"EDIT", L"",
+      WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+      margin + innerMargin, connectInnerY, innerWidth, logHeight,
+      mDialog, (HMENU)ID_LOG, nullptr, nullptr);
+  ::SendMessage(mLogEdit, WM_SETFONT, (WPARAM)textFont, TRUE);
+  connectInnerY += logHeight + 8;
+
+  // Release Owner button
+  mReleaseBtn = ::CreateWindowW(L"BUTTON", L"Release Owner",
+                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
+                                 margin + innerMargin, connectInnerY, innerWidth, 32,
+                                 mDialog, (HMENU)ID_RELEASE_BTN, nullptr, nullptr);
+  ::SendMessage(mReleaseBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  connectInnerY += 38;
+
+  // Create Connect groupbox frame
+  int connectSectionHeight = connectInnerY - connectSectionStart + 5;
+  HWND connectGroup = ::CreateWindowW(L"BUTTON", L"Connect",
+                                       WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                                       margin, connectSectionStart, ctrlWidth, connectSectionHeight,
+                                       mDialog, nullptr, nullptr, nullptr);
+  ::SendMessage(connectGroup, WM_SETFONT, (WPARAM)groupFont, TRUE);
+  contentY = connectInnerY + 15;
+
+  // ========== SECTION 2: Capture (GroupBox) ==========
+  int captureSectionStart = contentY;
+  int captureInnerY = contentY + 20;
+
+  // Explanatory text
+  HWND captureText = ::CreateWindowW(L"STATIC",
+      L"Lock mouse input to this Firefox window.\r\nUse the hotkey to toggle capture on/off.",
+      WS_CHILD | WS_VISIBLE | SS_LEFT,
+      margin + innerMargin, captureInnerY, innerWidth, 44,
+      mDialog, nullptr, nullptr, nullptr);
+  ::SendMessage(captureText, WM_SETFONT, (WPARAM)textFont, TRUE);
+  captureInnerY += 48;
+
+  // Row: [Capture Mouse (2/3)] [Hotkey dropdown (1/3)]
+  int twoThirdsWidth = (innerWidth * 2) / 3 - gap;
+  int thirdWidth = innerWidth - twoThirdsWidth - gap;
+
   mCaptureBtn = ::CreateWindowW(L"BUTTON", L"Capture Mouse",
                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
-                                 margin, contentY, ctrlWidth, 32, mDialog, (HMENU)ID_CAPTURE_BTN, nullptr, nullptr);
+                                 margin + innerMargin, captureInnerY, twoThirdsWidth, 32,
+                                 mDialog, (HMENU)ID_CAPTURE_BTN, nullptr, nullptr);
   ::SendMessage(mCaptureBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
-  contentY += 38;
-
-  // Row: [Hotkey dropdown (1/3)] [Release Owner (2/3)]
-  int thirdWidth = (ctrlWidth - gap) / 3;
-  int twoThirdsWidth = ctrlWidth - thirdWidth - gap;
 
   mHotkeyCombo = ::CreateWindowW(L"COMBOBOX", nullptr,
                                   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                  margin, contentY, thirdWidth, 200,
+                                  margin + innerMargin + twoThirdsWidth + gap, captureInnerY, thirdWidth, 200,
                                   mDialog, (HMENU)ID_HOTKEY_COMBO, nullptr, nullptr);
-  ::SendMessage(mHotkeyCombo, WM_SETFONT, (WPARAM)largeFont, TRUE);
-
-  mReleaseBtn = ::CreateWindowW(L"BUTTON", L"Release Owner",
-                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
-                                 margin + thirdWidth + gap, contentY, twoThirdsWidth, 32,
-                                 mDialog, (HMENU)ID_RELEASE_BTN, nullptr, nullptr);
-  ::SendMessage(mReleaseBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  ::SendMessage(mHotkeyCombo, WM_SETFONT, (WPARAM)textFont, TRUE);
 
   // Populate hotkey dropdown
   const wchar_t* hotkeyOptions[] = {
@@ -227,17 +235,64 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   for (const wchar_t* opt : hotkeyOptions) {
     ::SendMessageW(mHotkeyCombo, CB_ADDSTRING, 0, (LPARAM)opt);
   }
-  ::SendMessageW(mHotkeyCombo, CB_SETCURSEL, 10, 0);  // Default: F11 (index 10)
-  contentY += 38;
+  ::SendMessageW(mHotkeyCombo, CB_SETCURSEL, 10, 0);  // Default: F11
+  captureInnerY += 38;
 
-  // Log area
-  int logHeight = 180;
-  mLogEdit = ::CreateWindowExW(
-      WS_EX_CLIENTEDGE, L"EDIT", L"",
-      WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
-      margin, contentY, ctrlWidth, logHeight, mDialog, (HMENU)ID_LOG, nullptr, nullptr);
-  ::SendMessage(mLogEdit, WM_SETFONT, (WPARAM)largeFont, TRUE);
-  contentY += logHeight + 15;
+  // Create Capture groupbox frame
+  int captureSectionHeight = captureInnerY - captureSectionStart + 5;
+  HWND captureGroup = ::CreateWindowW(L"BUTTON", L"Capture",
+                                       WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                                       margin, captureSectionStart, ctrlWidth, captureSectionHeight,
+                                       mDialog, nullptr, nullptr, nullptr);
+  ::SendMessage(captureGroup, WM_SETFONT, (WPARAM)groupFont, TRUE);
+  contentY = captureInnerY + 15;
+
+  // ========== SECTION 3: Multi-seat (GroupBox) ==========
+  int multiSectionStart = contentY;
+  int multiInnerY = contentY + 20;
+
+  // Explanatory text
+  mProfileHintLabel = ::CreateWindowW(L"STATIC",
+      L"Launch another Firefox with a different profile for multi-seat setup.",
+      WS_CHILD | WS_VISIBLE | SS_LEFT,
+      margin + innerMargin, multiInnerY, innerWidth, 24,
+      mDialog, nullptr, nullptr, nullptr);
+  ::SendMessage(mProfileHintLabel, WM_SETFONT, (WPARAM)textFont, TRUE);
+  multiInnerY += 28;
+
+  // Profile dropdown
+  mProfileCombo = ::CreateWindowW(L"COMBOBOX", nullptr,
+                                   WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                   margin + innerMargin, multiInnerY, innerWidth, 200,
+                                   mDialog, (HMENU)ID_PROFILE_COMBO, nullptr, nullptr);
+  ::SendMessage(mProfileCombo, WM_SETFONT, (WPARAM)textFont, TRUE);
+  LoadFirefoxProfiles();
+  multiInnerY += 34;
+
+  // Launch button
+  mLaunchBtn = ::CreateWindowW(L"BUTTON", L"Launch",
+                                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                margin + innerMargin, multiInnerY, innerWidth, 32,
+                                mDialog, (HMENU)ID_LAUNCH, nullptr, nullptr);
+  ::SendMessage(mLaunchBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  multiInnerY += 38;
+
+  // Create Multi-seat groupbox frame
+  int multiSectionHeight = multiInnerY - multiSectionStart + 5;
+  HWND multiGroup = ::CreateWindowW(L"BUTTON", L"Multi-seat",
+                                     WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                                     margin, multiSectionStart, ctrlWidth, multiSectionHeight,
+                                     mDialog, nullptr, nullptr, nullptr);
+  ::SendMessage(multiGroup, WM_SETFONT, (WPARAM)groupFont, TRUE);
+  contentY = multiInnerY + 15;
+
+  // ========== BOTTOM: Hide button (no frame) ==========
+  mHideBtn = ::CreateWindowW(L"BUTTON", L"Hide",
+                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                              margin, contentY, ctrlWidth, 32,
+                              mDialog, (HMENU)ID_HIDE, nullptr, nullptr);
+  ::SendMessage(mHideBtn, WM_SETFONT, (WPARAM)btnFont, TRUE);
+  contentY += 45;
 
   // Resize dialog to fit content (contentY + title bar + border)
   int finalHeight = contentY + 45;
