@@ -14,7 +14,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define MOUSEMUX_CLIENT_VERSION "5.49"
+#define MOUSEMUX_CLIENT_VERSION "5.51"
 #define MOUSEMUX_SDK_VERSION "2.2.35"
 #define MOUSEMUX_BUILD_DATE __DATE__
 
@@ -671,6 +671,7 @@ POINT MouseMuxClient::ScreenToClient(int aScreenX, int aScreenY) {
   return pt;
 }
 
+#if MOUSEMUX_STALE_CODE
 WPARAM MouseMuxClient::BuildMouseWParam(uint32_t aHwid) {
   WPARAM wParam = MOUSEMUX_MARKER;
 
@@ -685,6 +686,7 @@ WPARAM MouseMuxClient::BuildMouseWParam(uint32_t aHwid) {
 
   return wParam;
 }
+#endif
 
 void MouseMuxClient::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScreenY) {
   {
@@ -696,12 +698,13 @@ void MouseMuxClient::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScre
   bool isOwner = (aHwid == owner);
   bool inWindow = IsPointInWindow(aScreenX, aScreenY);
 
-  // Log every 100th motion for debugging
+#if MOUSEMUX_DEBUG
   static int motionCount = 0;
   if (++motionCount % 100 == 0) {
     Log("MOTION[%d] hwid=0x%X pos=(%d,%d) owner=0x%X isOwner=%d inWin=%d",
         motionCount, aHwid, aScreenX, aScreenY, owner, isOwner, inWindow);
   }
+#endif
 
   // Track owner in/out of window (for status display only)
   if (isOwner) {
@@ -723,7 +726,6 @@ void MouseMuxClient::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScre
   POINT clientPt = ScreenToClient(aScreenX, aScreenY);
   LPARAM lParam = MAKELPARAM(clientPt.x, clientPt.y);
 
-#if MOUSEMUX_INPUT_METHOD == MOUSEMUX_INPUT_GECKO
   WPARAM wp = 0;
   {
     std::lock_guard<std::mutex> lock(mButtonStateMutex);
@@ -736,10 +738,6 @@ void MouseMuxClient::HandlePointerMotion(uint32_t aHwid, int aScreenX, int aScre
     }
   }
   ::PostMessage(mOwnerHwnd, WM_MOUSEMUX_MOTION, wp, lParam);
-#else
-  WPARAM wParam = BuildMouseWParam(aHwid);
-  ::PostMessage(mOwnerHwnd, WM_MOUSEMOVE, wParam, lParam);
-#endif
 }
 
 void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScreenY,
@@ -749,7 +747,9 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
     mLastMousePos[aHwid] = {aScreenX, aScreenY};
   }
 
+#if MOUSEMUX_DEBUG
   Log("BUTTON hwid=0x%X flags=0x%X at (%d,%d)", aHwid, aEventFlags, aScreenX, aScreenY);
+#endif
 
   bool leftDown = (aEventFlags & 0x01) != 0;
   bool leftUp = (aEventFlags & 0x02) != 0;
@@ -804,43 +804,12 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
   POINT clientPt = ScreenToClient(aScreenX, aScreenY);
   LPARAM lParam = MAKELPARAM(clientPt.x, clientPt.y);
 
-#if MOUSEMUX_INPUT_METHOD == MOUSEMUX_INPUT_GECKO
-  // Button state is synced on the UI thread (nsWindow) for the GECKO path
-  // to avoid race between worker PostMessage and UI-thread state reads.
   uint16_t btnStateMK = 0;
   if (currentState & 0x01) btnStateMK |= MK_LBUTTON;
   if (currentState & 0x04) btnStateMK |= MK_RBUTTON;
   if (currentState & 0x10) btnStateMK |= MK_MBUTTON;
   WPARAM wp = MAKEWPARAM(btnStateMK, aEventFlags);
   ::PostMessage(mOwnerHwnd, WM_MOUSEMUX_BUTTON, wp, lParam);
-#else
-  // Sync button state to InputFilter on worker thread for POSTMSG path
-  bool leftHeld = (currentState & 0x01) != 0;
-  bool rightHeld = (currentState & 0x04) != 0;
-  bool middleHeld = (currentState & 0x10) != 0;
-  InputFilter::SetMouseButtonState(mOwnerHwnd, leftHeld, rightHeld, middleHeld);
-
-  WPARAM wParam = BuildMouseWParam(aHwid);
-
-  if (leftDown) {
-    Log("LBUTTONDOWN hwid=0x%X at (%d,%d)", aHwid, aScreenX, aScreenY);
-    ::PostMessage(mOwnerHwnd, WM_LBUTTONDOWN, wParam, lParam);
-  }
-  if (leftUp) {
-    Log("LBUTTONUP hwid=0x%X at (%d,%d)", aHwid, aScreenX, aScreenY);
-    ::PostMessage(mOwnerHwnd, WM_LBUTTONUP, wParam, lParam);
-  }
-  if (rightDown) {
-    Log("RBUTTONDOWN hwid=0x%X at (%d,%d)", aHwid, aScreenX, aScreenY);
-    ::PostMessage(mOwnerHwnd, WM_RBUTTONDOWN, wParam, lParam);
-  }
-  if (rightUp) {
-    Log("RBUTTONUP hwid=0x%X at (%d,%d)", aHwid, aScreenX, aScreenY);
-    ::PostMessage(mOwnerHwnd, WM_RBUTTONUP, wParam, lParam);
-  }
-  if (middleDown) ::PostMessage(mOwnerHwnd, WM_MBUTTONDOWN, wParam, lParam);
-  if (middleUp) ::PostMessage(mOwnerHwnd, WM_MBUTTONUP, wParam, lParam);
-#endif
 }
 
 void MouseMuxClient::HandlePointerWheel(uint32_t aHwid, int aScreenX, int aScreenY,
@@ -855,7 +824,6 @@ void MouseMuxClient::HandlePointerWheel(uint32_t aHwid, int aScreenX, int aScree
   POINT clientPt = ScreenToClient(aScreenX, aScreenY);
   LPARAM lParam = MAKELPARAM(clientPt.x, clientPt.y);
 
-#if MOUSEMUX_INPUT_METHOD == MOUSEMUX_INPUT_GECKO
   uint16_t btnState = 0;
   {
     std::lock_guard<std::mutex> lock(mButtonStateMutex);
@@ -870,28 +838,12 @@ void MouseMuxClient::HandlePointerWheel(uint32_t aHwid, int aScreenX, int aScree
   uint16_t flags = btnState | (aIsHorizontal ? 0x4000 : 0);
   WPARAM wp = MAKEWPARAM(flags, (uint16_t)(int16_t)aDelta);
   ::PostMessage(mOwnerHwnd, WM_MOUSEMUX_WHEEL, wp, lParam);
-#else
-  WPARAM wParam = BuildMouseWParam(aHwid);
-  wParam |= ((aDelta & 0xFFFF) << 16);
-  UINT msg = aIsHorizontal ? WM_MOUSEHWHEEL : WM_MOUSEWHEEL;
-  ::PostMessage(mOwnerHwnd, msg, wParam, lParam);
-#endif
 }
 
 void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMessage,
                                     uint32_t aScanCode, uint32_t aFlags) {
   uint32_t owner = mOwnerHwid.load();
-
-  // Debug: log all keyboard events
-  const char* msgName = (aMessage == WM_KEYDOWN) ? "KEYDOWN" :
-                        (aMessage == WM_KEYUP) ? "KEYUP" :
-                        (aMessage == WM_SYSKEYDOWN) ? "SYSKEYDOWN" :
-                        (aMessage == WM_SYSKEYUP) ? "SYSKEYUP" : "OTHER";
-
-  if (owner == 0) {
-    Log("KEY REJECTED: %s vk=0x%X kbd_hwid=0x%X - no owner", msgName, aVkey, aHwid);
-    return;
-  }
+  if (owner == 0) return;
 
   // Find which mouse this keyboard belongs to
   uint32_t mouseHwid = 0;
@@ -906,20 +858,8 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
   }
 
   // Only accept keyboard input from the owner's paired keyboard
-  // Strict isolation: must positively identify keyboard belongs to owner's mouse
-  if (mouseHwid != owner) {
-    Log("KEY REJECTED: %s vk=0x%X kbd_hwid=0x%X mouse_hwid=0x%X owner=0x%X - %s",
-        msgName, aVkey, aHwid, mouseHwid, owner,
-        mouseHwid == 0 ? "unknown keyboard" : "wrong owner");
-    return;
-  }
-  if (!mOwnerHwnd) {
-    Log("KEY REJECTED: %s vk=0x%X - no owner hwnd", msgName, aVkey);
-    return;
-  }
-
-  Log("KEY ACCEPTED: %s vk=0x%X kbd_hwid=0x%X mouse_hwid=0x%X owner=0x%X -> HWND %p",
-      msgName, aVkey, aHwid, mouseHwid, owner, mOwnerHwnd);
+  if (mouseHwid != owner) return;
+  if (!mOwnerHwnd) return;
 
   // Determine if key is pressed or released
   bool isKeyDown = (aMessage == WM_KEYDOWN || aMessage == WM_SYSKEYDOWN);
@@ -934,7 +874,6 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
       bool shiftHeld = InputFilter::IsKeyDown(mOwnerHwnd, VK_SHIFT);
 
       if (aVkey == hotkey && shiftHeld == needShift) {
-        Log("Capture hotkey pressed (vk=0x%X shift=%d)", hotkey, needShift);
         dlg->ToggleCapture();
         // Sync capture state with server
         if (dlg->IsCaptureActive()) {
@@ -986,6 +925,7 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
 }
 
 void MouseMuxClient::Log(const char* aFormat, ...) {
+#if MOUSEMUX_DEBUG
   char buf[512];
   va_list args;
   va_start(args, aFormat);
@@ -1002,6 +942,9 @@ void MouseMuxClient::Log(const char* aFormat, ...) {
             mOwnerHwnd, buf);
     fclose(f);
   }
+#else
+  (void)aFormat;
+#endif
 }
 
 void MouseMuxClient::ShowDebugDialog() {

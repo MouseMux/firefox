@@ -5,7 +5,8 @@
 
 // Legacy singleton service - replaced by per-window MouseMuxClient.
 // Kept for reference. Removed from moz.build.
-#if 0
+#include "MouseMuxClient.h"  // For MOUSEMUX_STALE_CODE define
+#if MOUSEMUX_STALE_CODE
 
 #include "MouseMuxService.h"
 #include "MouseMuxDebugDialog.h"
@@ -669,4 +670,4 @@ void MouseMuxService::Log(const char* aFormat, ...) {
 }  // namespace widget
 }  // namespace mozilla
 
-#endif  // #if 0 - legacy code
+#endif  // MOUSEMUX_STALE_CODE

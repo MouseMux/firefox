@@ -27,6 +27,10 @@
 // Marker in wParam high bit to identify MouseMux-injected messages
 #define MOUSEMUX_MARKER 0x80000000
 
+// Build configuration
+#define MOUSEMUX_DEBUG       0  // Enable file logging and verbose debug output
+#define MOUSEMUX_STALE_CODE  0  // Enable legacy/unused code paths
+
 // Input injection method: GECKO dispatches WidgetMouseEvent via custom WM_,
 // POSTMSG uses legacy PostMessage(WM_LBUTTONDOWN, ...) with MOUSEMUX_MARKER.
 #define MOUSEMUX_INPUT_GECKO    1
@@ -99,8 +103,10 @@ class MouseMuxClient {
 
   // Helpers
   bool IsPointInWindow(int aScreenX, int aScreenY);
-  WPARAM BuildMouseWParam(uint32_t aHwid);
   POINT ScreenToClient(int aScreenX, int aScreenY);
+#if MOUSEMUX_STALE_CODE
+  WPARAM BuildMouseWParam(uint32_t aHwid);
+#endif
 
   // SDK v2.2.35 protocol
   bool SendWebSocketMessage(const std::string& aMessage);
