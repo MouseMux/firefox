@@ -14,7 +14,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-#define MOUSEMUX_CLIENT_VERSION "5.46"
+#define MOUSEMUX_CLIENT_VERSION "5.48"
 #define MOUSEMUX_SDK_VERSION "2.2.35"
 #define MOUSEMUX_BUILD_DATE __DATE__
 
@@ -814,36 +814,6 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
 
   // Owner is only cleared via Release Owner button - not when clicking outside
 
-  // Handle owner clicks on the debug dialog (owner's native input is captured by MouseMux)
-  // Also eat leftUp on dialog to prevent native button click after InputFilter is disabled
-  if ((leftDown || leftUp) && isOwner) {
-    auto* dlg = MouseMuxDebugDialog::GetInstance();
-    if (dlg && dlg->IsVisible()) {
-      HWND dialogHwnd = dlg->GetDialogHwnd();
-      if (dialogHwnd && ::IsWindow(dialogHwnd)) {
-        RECT dlgRect;
-        POINT pt = {aScreenX, aScreenY};
-        if (::GetWindowRect(dialogHwnd, &dlgRect) && ::PtInRect(&dlgRect, pt)) {
-          if (leftDown) {
-            // Owner clicked on dialog - simulate native button click
-            POINT clientPt = pt;
-            ::ScreenToClient(dialogHwnd, &clientPt);
-            HWND child = ::ChildWindowFromPoint(dialogHwnd, clientPt);
-            if (child && child != dialogHwnd) {
-              int ctrlId = ::GetDlgCtrlID(child);
-              if (ctrlId != 0 && ::IsWindowEnabled(child)) {
-                Log("Owner click on dialog control id=%d", ctrlId);
-                ::PostMessage(dialogHwnd, WM_COMMAND, MAKEWPARAM(ctrlId, BN_CLICKED), (LPARAM)child);
-              }
-            }
-          }
-          // Eat both down and up to prevent native double-click after disconnect
-          return;
-        }
-      }
-    }
-  }
-
   // Set owner on first click inside window (if no current owner)
   if (isButtonDown && inWindow && owner == 0) {
     mOwnerHwid.store(aHwid);
@@ -855,6 +825,9 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
   // Only process from owner (strict isolation)
   if (!isOwner) return;
   if (!mOwnerHwnd) return;
+
+  // Clicks outside Firefox: don't forward, let native Windows handle (including dialog)
+  if (!inWindow) return;
 
   // Get current button state for this device
   uint32_t currentState = 0;
