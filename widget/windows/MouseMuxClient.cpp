@@ -212,9 +212,11 @@ void MouseMuxClient::Disconnect() {
   }
   mOwnerInWindow.store(false);
 
-  // Send logout before disconnecting
+  // Send logout and wait for server to process before closing
   if (mConnected.load()) {
     SendLogout("user");
+    // Wait for server to process logout (up to 1 second)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   }
 
   mShouldStop.store(true);
