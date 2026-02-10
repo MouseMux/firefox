@@ -121,7 +121,6 @@ class MouseMuxClient {
   HWND mOwnerHwnd;
   std::atomic<uint32_t> mOwnerHwid{0};
   std::atomic<bool> mOwnerInWindow{false};   // Owner mouse is inside window
-  std::atomic<bool> mOwnerCaptured{false};   // Capture request sent for owner
 
   // Connection state
   std::wstring mServerUrl;

@@ -253,7 +253,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   for (const wchar_t* opt : hotkeyOptions) {
     ::SendMessageW(mHotkeyCombo, CB_ADDSTRING, 0, (LPARAM)opt);
   }
-  ::SendMessageW(mHotkeyCombo, CB_SETCURSEL, 10, 0);  // Default: F11
+  ::SendMessageW(mHotkeyCombo, CB_SETCURSEL, 8, 0);  // Default: F9
   captureInnerY += 38;
 
   // Create Capture groupbox frame
@@ -391,13 +391,12 @@ LRESULT MouseMuxDebugDialog::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, L
           return 0;
         }
         case ID_CAPTURE_BTN:
-          // Handle capture toggle and sync with server
           if (mClient) {
-            Log("RELEASE-SOURCE: Capture button clicked");
-            ToggleCapture();
-            // Sync capture state with server
             uint32_t owner = mClient->GetOwnerHwid();
-            if (owner != 0) {
+            if (owner == 0) {
+              Log("Cannot capture - no owner");
+            } else {
+              ToggleCapture();
               if (mCaptureActive) {
                 mClient->RequestCapture(owner);
               } else {

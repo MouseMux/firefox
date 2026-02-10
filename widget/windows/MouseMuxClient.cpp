@@ -190,25 +190,18 @@ void MouseMuxClient::SendReleaseCapture(uint32_t aHwid) {
 }
 
 void MouseMuxClient::RequestCapture(uint32_t aHwid) {
-  if (!mOwnerCaptured.load()) {
-    SendCapture(aHwid, 0);
-    mOwnerCaptured.store(true);
-  }
+  SendCapture(aHwid, 0);
 }
 
 void MouseMuxClient::RequestReleaseCapture(uint32_t aHwid) {
-  if (mOwnerCaptured.load()) {
-    SendReleaseCapture(aHwid);
-    mOwnerCaptured.store(false);
-  }
+  SendReleaseCapture(aHwid);
 }
 
 void MouseMuxClient::Disconnect() {
   // Release capture and owner
   uint32_t owner = mOwnerHwid.load();
-  if (mOwnerCaptured.load() && owner != 0) {
+  if (owner != 0) {
     SendReleaseCapture(owner);
-    mOwnerCaptured.store(false);
   }
   mOwnerHwid.store(0);
   mOwnerInWindow.store(false);
@@ -890,12 +883,13 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
       bool shiftHeld = InputFilter::IsKeyDown(mOwnerHwnd, VK_SHIFT);
 
       if (aVkey == hotkey && shiftHeld == needShift) {
-        dlg->ToggleCapture();
-        // Sync capture state with server
-        if (dlg->IsCaptureActive()) {
-          RequestCapture(owner);
-        } else {
-          RequestReleaseCapture(owner);
+        if (owner != 0) {
+          dlg->ToggleCapture();
+          if (dlg->IsCaptureActive()) {
+            RequestCapture(owner);
+          } else {
+            RequestReleaseCapture(owner);
+          }
         }
         return;  // Don't dispatch hotkey to Firefox
       }

@@ -83,7 +83,7 @@ class MouseMuxDebugDialog {
 
   bool mVisible = false;
   bool mCaptureActive = false;     // Capture currently active
-  uint8_t mCaptureHotkey = VK_F11; // Hotkey VK code
+  uint8_t mCaptureHotkey = VK_F9; // Hotkey VK code
   bool mCaptureHotkeyShift = false; // Hotkey requires Shift
   bool mClaiming = false;          // True while connecting
   bool mPendingBlock = false;      // True if we need to block after connect
