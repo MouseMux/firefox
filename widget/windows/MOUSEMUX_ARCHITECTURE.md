@@ -1,4 +1,4 @@
-# MouseMux Architecture (v5.55)
+# MouseMux Architecture (v5.57)
 
 ## Overview
 MouseMux provides multi-mouse/keyboard support for Firefox on Windows. It connects
@@ -126,7 +126,7 @@ case WM_MOUSEMUX_KEY:
 ### WM_MOUSEMUX_LOG (WM_USER + 105)
 - Used for log messages from worker thread to UI thread
 
-## Keyboard Pipeline (solved in v5.55)
+## Keyboard Pipeline (solved in v5.55, modifiers fixed in v5.57)
 
 The keyboard pipeline was the hardest part to get working. Key insights:
 
@@ -143,6 +143,22 @@ The keyboard pipeline was the hardest part to get working. Key insights:
 3. **Forwarding to focused child**: When WM_MOUSEMUX_KEY arrives at the top-level
    window, it checks `IMEHandler::GetFocusedWindow()`. If a different child nsWindow
    has Gecko focus, the message is forwarded there via PostMessage.
+
+4. **Block native WM_CHAR in InputFilter** (v5.56): Firefox's message loop calls
+   `TranslateMessage` BEFORE `DispatchMessage`, so native WM_KEYDOWN generates a
+   WM_CHAR in the queue before InputFilter ever sees WM_KEYDOWN. Without blocking
+   WM_CHAR, every key produces double input.
+
+5. **Modifier key state: dual-thread sync** (v5.57): `SetSingleKeyState` was originally
+   called only on the worker thread (in `HandleKeyboard`), but NativeKey reads modifier
+   state on the UI thread (via `IS_VK_DOWN` -> `MmGetKeyState`). Race condition: the
+   worker processes Ctrl-DOWN, C-DOWN, Ctrl-UP faster than the UI thread drains its
+   queue, so when the UI thread processes C-DOWN, Ctrl is already UP in the buffer.
+   Fix: added authoritative `SetSingleKeyState` in the `WM_MOUSEMUX_KEY` handler on the
+   UI thread, right before `ProcessKeyDownMessage`. The worker thread also keeps its
+   early sync (ensures buffer entry exists for code that reads state outside of message
+   processing). Both threads update the same buffer; the UI thread sync is what matters
+   for correct modifier detection during key processing.
 
 ## Build Flags
 
@@ -191,3 +207,5 @@ Defined in `MouseMuxClient.h`:
 - v5.53: Fix capture button bugs, change default hotkey to F9
 - v5.54: Migrate keyboard to WM_MOUSEMUX_KEY custom message
 - v5.55: Fix keyboard - TranslateMessage + SetFocus enables typing without foreground
+- v5.56: Block native WM_CHAR in InputFilter to fix double key input
+- v5.57: Fix modifier keys - dual-thread key state sync (worker early + UI authoritative)

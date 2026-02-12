@@ -932,42 +932,32 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
     }
   }
 
-  // Sync key state to InputFilter for this window
+  // Early key state sync on the worker thread. The authoritative sync happens
+  // on the UI thread in the WM_MOUSEMUX_KEY handler (right before Gecko
+  // processes the key), which fixes fast modifier combos. This early sync
+  // ensures the buffer entry exists for code that may read state outside
+  // of message processing.
   if (isKeyDown || isKeyUp) {
-    // Handle toggle keys (CapsLock, NumLock, ScrollLock)
     bool isToggleKey = (aVkey == VK_CAPITAL || aVkey == VK_NUMLOCK || aVkey == VK_SCROLL);
     if (isToggleKey && isKeyDown) {
-      // Toggle keys flip their toggle state on keydown
-      // For now, just set as pressed - full toggle tracking would need state
       InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, true, false);
     } else {
       InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown, false);
     }
-
-    // Sync generic + left/right variants for all modifier keys.
-    // Windows reports either the generic or specific VK depending on context,
-    // so we keep both in sync. Firefox checks VK_RMENU for AltGr detection.
     switch (aVkey) {
-      case VK_SHIFT:
-      case VK_LSHIFT:
-      case VK_RSHIFT:
+      case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
         InputFilter::SetSingleKeyState(mOwnerHwnd, VK_SHIFT, isKeyDown);
         InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown);
         break;
-      case VK_CONTROL:
-      case VK_LCONTROL:
-      case VK_RCONTROL:
+      case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
         InputFilter::SetSingleKeyState(mOwnerHwnd, VK_CONTROL, isKeyDown);
         InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown);
         break;
-      case VK_MENU:
-      case VK_LMENU:
-      case VK_RMENU:
+      case VK_MENU: case VK_LMENU: case VK_RMENU:
         InputFilter::SetSingleKeyState(mOwnerHwnd, VK_MENU, isKeyDown);
         InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown);
         break;
-      case VK_LWIN:
-      case VK_RWIN:
+      case VK_LWIN: case VK_RWIN:
         InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown);
         break;
     }

@@ -5467,6 +5467,43 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
       }
 
       MOUSEMUX_KEY_LOG("[Handler] PROCESSING locally: vkey=0x%X msgType=0x%X", vkey, msgType);
+
+      // Authoritative key state sync ON THE UI THREAD, right before Gecko
+      // processes the key. HandleKeyboard also sets state on the worker thread
+      // (early sync), but THIS is what matters for modifier combos: without it,
+      // the worker can process Ctrl-DOWN, C-DOWN, Ctrl-UP all before the UI
+      // thread gets to C-DOWN, leaving Ctrl=UP in the buffer for NativeKey.
+      {
+        bool isDown = (msgType == WM_KEYDOWN || msgType == WM_SYSKEYDOWN);
+        bool isToggleKey = (vkey == VK_CAPITAL || vkey == VK_NUMLOCK ||
+                            vkey == VK_SCROLL);
+        if (isToggleKey && isDown) {
+          InputFilter::SetSingleKeyState(mWnd, vkey, true, false);
+        } else {
+          InputFilter::SetSingleKeyState(mWnd, vkey, isDown, false);
+        }
+        // Sync generic + left/right variants for modifier keys.
+        // Windows reports either generic or specific VK depending on context,
+        // so keep both in sync. Firefox checks VK_RMENU for AltGr detection.
+        switch (vkey) {
+          case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
+            InputFilter::SetSingleKeyState(mWnd, VK_SHIFT, isDown);
+            InputFilter::SetSingleKeyState(mWnd, vkey, isDown);
+            break;
+          case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+            InputFilter::SetSingleKeyState(mWnd, VK_CONTROL, isDown);
+            InputFilter::SetSingleKeyState(mWnd, vkey, isDown);
+            break;
+          case VK_MENU: case VK_LMENU: case VK_RMENU:
+            InputFilter::SetSingleKeyState(mWnd, VK_MENU, isDown);
+            InputFilter::SetSingleKeyState(mWnd, vkey, isDown);
+            break;
+          case VK_LWIN: case VK_RWIN:
+            InputFilter::SetSingleKeyState(mWnd, vkey, isDown);
+            break;
+        }
+      }
+
       if (::GetFocus() != mWnd) {
         ::SetFocus(mWnd);
       }
