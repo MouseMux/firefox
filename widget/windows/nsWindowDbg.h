@@ -149,7 +149,7 @@ void DDError(const char* msg, HRESULT hr);
 bool is_vk_down(int vk);
 #  define IS_VK_DOWN is_vk_down
 #else
-#  define IS_VK_DOWN(a) (GetKeyState(a) < 0)
+#  define IS_VK_DOWN(a) (mozilla::widget::InputFilter::MmGetKeyState(a) < 0)
 #endif  // defined(DEBUG_VK)
 
 #endif /* WindowDbg_h__ */

@@ -146,6 +146,9 @@ class MouseMuxClient {
   std::mutex mMousePosMutex;
 
   std::map<uint32_t, uint32_t> mMouseToKeyboard;
+  // Maps every device hwid (pointer or keyboard) to a user index.
+  // Devices with the same user index belong to the same user.
+  std::map<uint32_t, int> mDeviceToUser;
   std::mutex mMappingMutex;
 
   // Debug dialog state

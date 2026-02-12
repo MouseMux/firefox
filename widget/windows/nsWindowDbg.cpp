@@ -8,6 +8,7 @@
  */
 
 #include "nsWindowDbg.h"
+#include "InputFilter.h"
 #include "nsToolkit.h"
 #include "WinPointerEvents.h"
 #include "nsWindowLoggedMessages.h"
@@ -1766,7 +1767,7 @@ void DDError(const char* msg, HRESULT hr) {
 
 #ifdef DEBUG_VK
 bool is_vk_down(int vk) {
-  SHORT st = GetKeyState(vk);
+  SHORT st = InputFilter::MmGetKeyState(vk);
 #  ifdef DEBUG
   MOZ_LOG(gWindowsLog, LogLevel::Info, ("is_vk_down vk=%x st=%x\n", vk, st));
 #  endif

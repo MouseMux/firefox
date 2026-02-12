@@ -190,14 +190,35 @@ void MouseMuxClient::SendReleaseCapture(uint32_t aHwid) {
 }
 
 void MouseMuxClient::RequestCapture(uint32_t aHwid) {
+  {
+    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+    if (f) {
+      fprintf(f, "[CAPTURE] RequestCapture hwid=%u owner=%u\n", aHwid, mOwnerHwid.load());
+      fclose(f);
+    }
+  }
   SendCapture(aHwid, 0);
 }
 
 void MouseMuxClient::RequestReleaseCapture(uint32_t aHwid) {
+  {
+    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+    if (f) {
+      fprintf(f, "[CAPTURE] RequestReleaseCapture hwid=%u owner=%u\n", aHwid, mOwnerHwid.load());
+      fclose(f);
+    }
+  }
   SendReleaseCapture(aHwid);
 }
 
 void MouseMuxClient::Disconnect() {
+  {
+    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+    if (f) {
+      fprintf(f, "[DISCONNECT] owner=%u\n", mOwnerHwid.load());
+      fclose(f);
+    }
+  }
   // Release capture and owner
   uint32_t owner = mOwnerHwid.load();
   if (owner != 0) {
@@ -525,6 +546,15 @@ void MouseMuxClient::HandleMessage(const std::string& aMessage) {
 
   std::string type = getString("type");
 
+  // Log all non-motion messages to trace state changes
+  if (type != "pointer.motion.notify.M2A" && type != "server.ping.notify.M2A") {
+    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+    if (f) {
+      fprintf(f, "[MSG] type=%s owner=%u\n", type.c_str(), mOwnerHwid.load());
+      fclose(f);
+    }
+  }
+
   if (type == "pointer.motion.notify.M2A") {
     HandlePointerMotion(getUint("hwid"), getInt("x"), getInt("y"));
   } else if (type == "pointer.button.notify.M2A") {
@@ -584,29 +614,35 @@ void MouseMuxClient::HandleMessage(const std::string& aMessage) {
 }
 
 void MouseMuxClient::ParseUserList(const std::string& aMessage) {
+  {
+    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+    if (f) {
+      fprintf(f, "[ParseUserList] message=%s\n", aMessage.c_str());
+      fclose(f);
+    }
+  }
   std::lock_guard<std::mutex> lock(mMappingMutex);
   mMouseToKeyboard.clear();
+  mDeviceToUser.clear();
 
-  // Format: {"type":"user.list.notify.M2A","users":[{devices:[{hwid,type},...]},...]}
-  // Each user has devices array with type "pointer" or "keyboard"
   size_t pos = aMessage.find("\"users\":");
   if (pos == std::string::npos) {
     Log("ParseUserList: no users array found");
     return;
   }
 
-  // Parse each user object
+  // Parse each user object and extract all devices.
+  // A user can have multiple pointers (physical + capture) and keyboards.
+  int userIndex = 0;
   size_t searchPos = pos;
   while (true) {
-    // Find next "devices" array
     size_t devicesPos = aMessage.find("\"devices\":", searchPos);
     if (devicesPos == std::string::npos) break;
 
-    // Find the devices array bounds
     size_t devArrayStart = aMessage.find("[", devicesPos);
     if (devArrayStart == std::string::npos) break;
 
-    // Find matching closing bracket (handle nested objects)
+    // Find matching closing bracket
     int depth = 1;
     size_t devArrayEnd = devArrayStart + 1;
     while (depth > 0 && devArrayEnd < aMessage.length()) {
@@ -615,50 +651,74 @@ void MouseMuxClient::ParseUserList(const std::string& aMessage) {
       devArrayEnd++;
     }
 
-    std::string devicesStr = aMessage.substr(devArrayStart, devArrayEnd - devArrayStart);
+    userIndex++;
+    std::vector<uint32_t> pointerHwids;
+    std::vector<uint32_t> keyboardHwids;
 
-    // Extract pointer and keyboard hwids from this user's devices
-    uint32_t pointerHwid = 0;
-    uint32_t keyboardHwid = 0;
+    // Iterate top-level device objects within the array
+    size_t devObjPos = devArrayStart + 1;
+    while (devObjPos < devArrayEnd) {
+      size_t objStart = aMessage.find('{', devObjPos);
+      if (objStart == std::string::npos || objStart >= devArrayEnd) break;
 
-    size_t devPos = 0;
-    while ((devPos = devicesStr.find("\"hwid\":", devPos)) != std::string::npos) {
-      uint32_t hwid = (uint32_t)strtoul(devicesStr.c_str() + devPos + 7, nullptr, 10);
+      int objDepth = 1;
+      size_t objEnd = objStart + 1;
+      while (objDepth > 0 && objEnd < devArrayEnd) {
+        if (aMessage[objEnd] == '{') objDepth++;
+        else if (aMessage[objEnd] == '}') objDepth--;
+        objEnd++;
+      }
 
-      // Find type for this device (look backwards for "type" before this hwid, or forwards)
-      size_t typePos = devicesStr.rfind("\"type\":", devPos);
-      size_t nextTypePos = devicesStr.find("\"type\":", devPos);
-
-      // Use whichever is closer/more relevant to this device object
       std::string devType;
-      size_t checkPos = (nextTypePos != std::string::npos && nextTypePos < devPos + 50)
-                        ? nextTypePos : typePos;
-      if (checkPos != std::string::npos) {
-        size_t quoteStart = devicesStr.find("\"", checkPos + 7);
-        size_t quoteEnd = devicesStr.find("\"", quoteStart + 1);
-        if (quoteStart != std::string::npos && quoteEnd != std::string::npos) {
-          devType = devicesStr.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+      size_t typePos = aMessage.find("\"type\":", objStart);
+      if (typePos != std::string::npos && typePos < objEnd) {
+        size_t qs = aMessage.find('"', typePos + 7);
+        size_t qe = (qs != std::string::npos) ? aMessage.find('"', qs + 1) : std::string::npos;
+        if (qs != std::string::npos && qe != std::string::npos && qe < objEnd) {
+          devType = aMessage.substr(qs + 1, qe - qs - 1);
         }
       }
 
-      if (devType == "pointer" && hwid) {
-        pointerHwid = hwid;
-      } else if (devType == "keyboard" && hwid) {
-        keyboardHwid = hwid;
+      uint32_t hwid = 0;
+      size_t hwidPos = aMessage.find("\"hwid\":", objStart);
+      if (hwidPos != std::string::npos && hwidPos < objEnd) {
+        hwid = (uint32_t)strtoul(aMessage.c_str() + hwidPos + 7, nullptr, 10);
       }
 
-      devPos += 7;
+      if (hwid) {
+        mDeviceToUser[hwid] = userIndex;
+        if (devType == "pointer") {
+          pointerHwids.push_back(hwid);
+        } else if (devType == "keyboard") {
+          keyboardHwids.push_back(hwid);
+        }
+      }
+
+      devObjPos = objEnd;
     }
 
-    if (pointerHwid && keyboardHwid) {
-      mMouseToKeyboard[pointerHwid] = keyboardHwid;
-      Log("User mapping: mouse 0x%X -> keyboard 0x%X", pointerHwid, keyboardHwid);
+    // Build pointer-to-keyboard mappings for all combinations
+    for (uint32_t ph : pointerHwids) {
+      for (uint32_t kh : keyboardHwids) {
+        mMouseToKeyboard[ph] = kh;
+      }
     }
 
     searchPos = devArrayEnd;
   }
 
-  Log("User list updated: %zu mappings", mMouseToKeyboard.size());
+  {
+    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+    if (f) {
+      fprintf(f, "[ParseUserList] %zu mappings, %zu device-to-user entries:\n",
+              mMouseToKeyboard.size(), mDeviceToUser.size());
+      for (const auto& pair : mMouseToKeyboard) {
+        fprintf(f, "  pointer %u -> keyboard %u\n", pair.first, pair.second);
+      }
+      fclose(f);
+    }
+  }
+  Log("User list updated: %zu mappings, %zu devices", mMouseToKeyboard.size(), mDeviceToUser.size());
 }
 
 bool MouseMuxClient::IsPointInWindow(int aScreenX, int aScreenY) {
@@ -789,6 +849,13 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
   if (isButtonDown && inWindow && owner == 0) {
     mOwnerHwid.store(aHwid);
     Log("New owner: hwid=0x%X (locked)", aHwid);
+    {
+      FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+      if (f) {
+        fprintf(f, "[OWNER] New owner set: hwid=%u\n", aHwid);
+        fclose(f);
+      }
+    }
     UpdateDebugStatusSafe();
     isOwner = true;
   }
@@ -852,22 +919,36 @@ void MouseMuxClient::HandlePointerWheel(uint32_t aHwid, int aScreenX, int aScree
 void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMessage,
                                     uint32_t aScanCode, uint32_t aFlags) {
   uint32_t owner = mOwnerHwid.load();
-  if (owner == 0) return;
-
-  // Find which mouse this keyboard belongs to
-  uint32_t mouseHwid = 0;
   {
-    std::lock_guard<std::mutex> lock(mMappingMutex);
-    for (const auto& pair : mMouseToKeyboard) {
-      if (pair.second == aHwid) {
-        mouseHwid = pair.first;
-        break;
-      }
+    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+    if (f) {
+      fprintf(f, "[HandleKeyboard] ENTER: hwid=%u vkey=0x%X msg=0x%X owner=%u mOwnerHwnd=%p\n",
+              aHwid, aVkey, aMessage, owner, mOwnerHwnd);
+      fclose(f);
     }
   }
+  if (owner == 0) return;
 
-  // Only accept keyboard input from the owner's paired keyboard
-  if (mouseHwid != owner) return;
+  // Check if this keyboard belongs to the same user as the owner pointer.
+  // During capture mode, a user has multiple pointers (physical + capture)
+  // and keyboards, so we can't just check if the paired mouse == owner.
+  {
+    std::lock_guard<std::mutex> lock(mMappingMutex);
+    auto kbIt = mDeviceToUser.find(aHwid);
+    auto ownerIt = mDeviceToUser.find(owner);
+    int kbUser = (kbIt != mDeviceToUser.end()) ? kbIt->second : 0;
+    int ownerUser = (ownerIt != mDeviceToUser.end()) ? ownerIt->second : 0;
+
+    {
+      FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+      if (f) {
+        fprintf(f, "[HandleKeyboard] kbUser=%d ownerUser=%d owner=%u\n", kbUser, ownerUser, owner);
+        fclose(f);
+      }
+    }
+    // Reject if both are mapped to known but different users
+    if (kbUser != 0 && ownerUser != 0 && kbUser != ownerUser) return;
+  }
   if (!mOwnerHwnd) return;
 
   // Determine if key is pressed or released
@@ -883,6 +964,14 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
       bool shiftHeld = InputFilter::IsKeyDown(mOwnerHwnd, VK_SHIFT);
 
       if (aVkey == hotkey && shiftHeld == needShift) {
+        {
+          FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+          if (f) {
+            fprintf(f, "[HOTKEY] Capture hotkey pressed: vkey=0x%X owner=%u captureActive=%d\n",
+                    aVkey, owner, dlg->IsCaptureActive() ? 1 : 0);
+            fclose(f);
+          }
+        }
         if (owner != 0) {
           dlg->ToggleCapture();
           if (dlg->IsCaptureActive()) {
@@ -908,15 +997,32 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
       InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown, false);
     }
 
-    // Also update modifier keys state (Shift, Ctrl, Alt)
-    if (aVkey == VK_SHIFT || aVkey == VK_LSHIFT || aVkey == VK_RSHIFT) {
-      InputFilter::SetSingleKeyState(mOwnerHwnd, VK_SHIFT, isKeyDown, false);
-    }
-    if (aVkey == VK_CONTROL || aVkey == VK_LCONTROL || aVkey == VK_RCONTROL) {
-      InputFilter::SetSingleKeyState(mOwnerHwnd, VK_CONTROL, isKeyDown, false);
-    }
-    if (aVkey == VK_MENU || aVkey == VK_LMENU || aVkey == VK_RMENU) {
-      InputFilter::SetSingleKeyState(mOwnerHwnd, VK_MENU, isKeyDown, false);
+    // Sync generic + left/right variants for all modifier keys.
+    // Windows reports either the generic or specific VK depending on context,
+    // so we keep both in sync. Firefox checks VK_RMENU for AltGr detection.
+    switch (aVkey) {
+      case VK_SHIFT:
+      case VK_LSHIFT:
+      case VK_RSHIFT:
+        InputFilter::SetSingleKeyState(mOwnerHwnd, VK_SHIFT, isKeyDown);
+        InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown);
+        break;
+      case VK_CONTROL:
+      case VK_LCONTROL:
+      case VK_RCONTROL:
+        InputFilter::SetSingleKeyState(mOwnerHwnd, VK_CONTROL, isKeyDown);
+        InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown);
+        break;
+      case VK_MENU:
+      case VK_LMENU:
+      case VK_RMENU:
+        InputFilter::SetSingleKeyState(mOwnerHwnd, VK_MENU, isKeyDown);
+        InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown);
+        break;
+      case VK_LWIN:
+      case VK_RWIN:
+        InputFilter::SetSingleKeyState(mOwnerHwnd, aVkey, isKeyDown);
+        break;
     }
   }
 
@@ -930,8 +1036,16 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
     lParam |= (1 << 31);  // transition state
   }
 
-  WPARAM markedVkey = aVkey | MOUSEMUX_MARKER;
-  ::PostMessage(mOwnerHwnd, aMessage, markedVkey, lParam);
+  WPARAM wp = MAKEWPARAM(aVkey, aMessage);
+  {
+    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
+    if (f) {
+      fprintf(f, "[HandleKeyboard] PostMessage WM_MOUSEMUX_KEY: vkey=0x%X msg=0x%X wp=0x%llX lParam=0x%llX hwnd=%p\n",
+              aVkey, aMessage, (unsigned long long)wp, (unsigned long long)lParam, mOwnerHwnd);
+      fclose(f);
+    }
+  }
+  ::PostMessage(mOwnerHwnd, WM_MOUSEMUX_KEY, wp, lParam);
 }
 
 void MouseMuxClient::Log(const char* aFormat, ...) {

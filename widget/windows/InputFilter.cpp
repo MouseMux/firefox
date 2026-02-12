@@ -220,14 +220,25 @@ bool InputFilter::IsKeyDown(HWND hwnd, int vkey) {
 }
 
 // Mouse button state management
-void InputFilter::SetMouseButtonState(HWND hwnd, bool left, bool right, bool middle) {
+void InputFilter::SetMouseButtonState(HWND hwnd, bool left, bool right,
+                                       bool middle, bool xbutton1,
+                                       bool xbutton2) {
   HWND topLevel = GetTopLevelWindow(hwnd);
   if (!topLevel) topLevel = hwnd;
-  std::lock_guard<std::mutex> lock(sMouseButtonMutex);
-  MouseButtonState& state = sMouseButtonStates[topLevel];
-  state.left = left;
-  state.right = right;
-  state.middle = middle;
+  {
+    std::lock_guard<std::mutex> lock(sMouseButtonMutex);
+    MouseButtonState& state = sMouseButtonStates[topLevel];
+    state.left = left;
+    state.right = right;
+    state.middle = middle;
+    state.xbutton1 = xbutton1;
+    state.xbutton2 = xbutton2;
+  }
+  SetSingleKeyState(hwnd, VK_LBUTTON, left);
+  SetSingleKeyState(hwnd, VK_RBUTTON, right);
+  SetSingleKeyState(hwnd, VK_MBUTTON, middle);
+  SetSingleKeyState(hwnd, VK_XBUTTON1, xbutton1);
+  SetSingleKeyState(hwnd, VK_XBUTTON2, xbutton2);
 }
 
 WORD InputFilter::GetMouseButtonState(HWND hwnd) {
@@ -242,6 +253,8 @@ WORD InputFilter::GetMouseButtonState(HWND hwnd) {
   if (it->second.left) flags |= MK_LBUTTON;
   if (it->second.right) flags |= MK_RBUTTON;
   if (it->second.middle) flags |= MK_MBUTTON;
+  if (it->second.xbutton1) flags |= MK_XBUTTON1;
+  if (it->second.xbutton2) flags |= MK_XBUTTON2;
   return flags;
 }
 
@@ -276,10 +289,49 @@ bool InputFilter::GetCurrentMouseButtons(uint16_t* outButtons) {
 
   // Convert MK_* flags to MouseButtonsFlag values
   // MouseButtonsFlag::ePrimaryFlag = 1, eSecondaryFlag = 2, eMiddleFlag = 4
-  if (flags & MK_LBUTTON) *outButtons |= 1;   // ePrimaryFlag
-  if (flags & MK_RBUTTON) *outButtons |= 2;   // eSecondaryFlag
-  if (flags & MK_MBUTTON) *outButtons |= 4;   // eMiddleFlag
+  if (flags & MK_LBUTTON) *outButtons |= 1;    // ePrimaryFlag
+  if (flags & MK_RBUTTON) *outButtons |= 2;    // eSecondaryFlag
+  if (flags & MK_MBUTTON) *outButtons |= 4;    // eMiddleFlag
+  if (flags & MK_XBUTTON1) *outButtons |= 8;   // e4thFlag
+  if (flags & MK_XBUTTON2) *outButtons |= 16;  // e5thFlag
 
+  return true;
+}
+
+SHORT InputFilter::MmGetKeyState(int vkey) {
+  HWND hwnd = sCurrentProcessingWindow;
+  if (hwnd && IsEnabledForWindow(hwnd)) {
+    if (vkey < 0 || vkey > 255) return 0;
+    HWND topLevel = GetTopLevelWindow(hwnd);
+    if (!topLevel) topLevel = hwnd;
+    std::lock_guard<std::mutex> lock(sKeyboardMutex);
+    auto it = sKeyboardStates.find(topLevel);
+    if (it != sKeyboardStates.end() && it->second.valid) {
+      BYTE val = it->second.keys[vkey];
+      // Match GetKeyState() return format:
+      // high bit of SHORT = key is down, low bit = toggled
+      SHORT result = 0;
+      if (val & 0x80) result = (SHORT)0x8000;
+      if (val & 0x01) result |= 1;
+      return result;
+    }
+  }
+  return ::GetKeyState(vkey);
+}
+
+bool InputFilter::MmGetKeyboardState(BYTE* outState) {
+  HWND hwnd = sCurrentProcessingWindow;
+  if (hwnd && IsEnabledForWindow(hwnd)) {
+    HWND topLevel = GetTopLevelWindow(hwnd);
+    if (!topLevel) topLevel = hwnd;
+    std::lock_guard<std::mutex> lock(sKeyboardMutex);
+    auto it = sKeyboardStates.find(topLevel);
+    if (it != sKeyboardStates.end() && it->second.valid) {
+      memcpy(outState, it->second.keys, 256);
+      return true;
+    }
+  }
+  ::GetKeyboardState(outState);
   return true;
 }
 

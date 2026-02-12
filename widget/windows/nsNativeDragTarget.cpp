@@ -12,6 +12,7 @@
 
 #include "nsIWidget.h"
 #include "nsWindow.h"
+#include "InputFilter.h"
 #include "nsClipboard.h"
 #include "KeyboardLayout.h"
 
@@ -144,7 +145,9 @@ void nsNativeDragTarget::GetGeckoDragAction(DWORD grfKeyState,
       mEffectsPreferred, *pdwEffect, *aGeckoAction);
 }
 
-inline bool IsKeyDown(char key) { return GetKeyState(key) < 0; }
+inline bool IsKeyDown(char key) {
+  return InputFilter::MmGetKeyState(key) < 0;
+}
 
 void nsNativeDragTarget::DispatchDragDropEvent(EventMessage aEventMessage,
                                                const POINTL& aPT) {

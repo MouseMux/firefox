@@ -862,13 +862,13 @@ void ModifierKeyState::Update() {
   if (IS_VK_DOWN(VK_LWIN) || IS_VK_DOWN(VK_RWIN)) {
     mModifiers |= MODIFIER_META;
   }
-  if (::GetKeyState(VK_CAPITAL) & 1) {
+  if (InputFilter::MmGetKeyState(VK_CAPITAL) & 1) {
     mModifiers |= MODIFIER_CAPSLOCK;
   }
-  if (::GetKeyState(VK_NUMLOCK) & 1) {
+  if (InputFilter::MmGetKeyState(VK_NUMLOCK) & 1) {
     mModifiers |= MODIFIER_NUMLOCK;
   }
-  if (::GetKeyState(VK_SCROLL) & 1) {
+  if (InputFilter::MmGetKeyState(VK_SCROLL) & 1) {
     mModifiers |= MODIFIER_SCROLLLOCK;
   }
 }
@@ -1843,7 +1843,7 @@ void NativeKey::InitWithAppCommand() {
   if (mVirtualKeyCode) {
     BYTE kbdState[256];
     memset(kbdState, 0, sizeof(kbdState));
-    ::GetKeyboardState(kbdState);
+    InputFilter::MmGetKeyboardState(kbdState);
     mIsSkippableInRemoteProcess = mIsRepeat = !!kbdState[mVirtualKeyCode];
   }
 }

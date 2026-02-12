@@ -12,6 +12,7 @@
 #include "nsWindow.h"
 #include "nsWindowDefs.h"
 #include "KeyboardLayout.h"
+#include "InputFilter.h"
 #include "WinUtils.h"
 #include "nsGkAtoms.h"
 #include "nsIDOMWindowUtils.h"
@@ -176,7 +177,7 @@ void MouseScrollHandler::MaybeLogKeyState() {
     return;
   }
   BYTE keyboardState[256];
-  if (::GetKeyboardState(keyboardState)) {
+  if (widget::InputFilter::MmGetKeyboardState(keyboardState)) {
     for (size_t i = 0; i < std::size(keyboardState); i++) {
       if (keyboardState[i]) {
         MOZ_LOG(gMouseScrollLog, LogLevel::Debug,
@@ -1565,7 +1566,7 @@ nsresult MouseScrollHandler::SynthesizingEvent::Synthesize(
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  ::GetKeyboardState(mOriginalKeyState);
+  widget::InputFilter::MmGetKeyboardState(mOriginalKeyState);
 
   // Note that we cannot use ::SetCursorPos() because it works asynchronously.
   // We should SEND the message for reducing the possibility of receiving

@@ -47,7 +47,8 @@ class InputFilter {
   static bool IsKeyDown(HWND hwnd, int vkey);
 
   // Per-window mouse button state from MouseMux
-  static void SetMouseButtonState(HWND hwnd, bool left, bool right, bool middle);
+  static void SetMouseButtonState(HWND hwnd, bool left, bool right, bool middle,
+                                    bool xbutton1 = false, bool xbutton2 = false);
   static WORD GetMouseButtonState(HWND hwnd);
 
   // Current window being processed (for use by KeyboardLayout)
@@ -59,6 +60,12 @@ class InputFilter {
   // Get mouse button state for current window (called by KeyboardLayout)
   // Returns flags compatible with MouseButtonsFlag enum
   static bool GetCurrentMouseButtons(uint16_t* outButtons);
+
+  // Drop-in replacements for native Win32 keyboard state queries.
+  // When filtering is active for the current window, these return from
+  // InputFilter's tracked state. Otherwise they fall back to native.
+  static SHORT MmGetKeyState(int vkey);
+  static bool MmGetKeyboardState(BYTE* outState);
 
  private:
   static std::map<HWND, bool> sEnabledWindows;
@@ -86,6 +93,8 @@ class InputFilter {
     bool left = false;
     bool right = false;
     bool middle = false;
+    bool xbutton1 = false;
+    bool xbutton2 = false;
   };
   static std::map<HWND, MouseButtonState> sMouseButtonStates;
   static std::mutex sMouseButtonMutex;
