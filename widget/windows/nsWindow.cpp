@@ -4389,42 +4389,36 @@ bool nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
       }
     }
 
-    // MouseMux diagnostic: log event details before dispatch
+#if MOUSEMUX_DEBUG
     if (InputFilter::IsEnabledForWindow(mWnd) &&
         (aEventMessage == eMouseDown || aEventMessage == eMouseUp)) {
-      FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
-      if (f) {
-        fprintf(f, "[DispatchMouseEvent] msg=%s btn=%d pos=(%d,%d) "
-                "clickCount=%ld mButtons=0x%X mModifiers=0x%X "
-                "convertToPointer=%d pointerId=%u capture=%d\n",
-                aEventMessage == eMouseDown ? "DOWN" : "UP",
-                (int)mouseOrPointerEvent.mButton,
-                mouseOrPointerEvent.mRefPoint.x.value,
-                mouseOrPointerEvent.mRefPoint.y.value,
-                mouseOrPointerEvent.mClickCount,
-                (unsigned)mouseOrPointerEvent.mButtons,
-                (unsigned)mouseOrPointerEvent.mModifiers,
-                (int)mouseOrPointerEvent.convertToPointer,
-                mouseOrPointerEvent.pointerId,
-                (int)sIsInMouseCapture);
-        fclose(f);
-      }
+      MOUSEMUX_KEY_LOG("[DispatchMouseEvent] msg=%s btn=%d pos=(%d,%d) "
+                       "clickCount=%ld mButtons=0x%X mModifiers=0x%X "
+                       "convertToPointer=%d pointerId=%u capture=%d",
+                       aEventMessage == eMouseDown ? "DOWN" : "UP",
+                       (int)mouseOrPointerEvent.mButton,
+                       mouseOrPointerEvent.mRefPoint.x.value,
+                       mouseOrPointerEvent.mRefPoint.y.value,
+                       mouseOrPointerEvent.mClickCount,
+                       (unsigned)mouseOrPointerEvent.mButtons,
+                       (unsigned)mouseOrPointerEvent.mModifiers,
+                       (int)mouseOrPointerEvent.convertToPointer,
+                       mouseOrPointerEvent.pointerId,
+                       (int)sIsInMouseCapture);
     }
+#endif
 
     nsIWidget::ContentAndAPZEventStatus eventStatus =
         DispatchInputEvent(&mouseOrPointerEvent);
 
-    // MouseMux diagnostic: log dispatch result
+#if MOUSEMUX_DEBUG
     if (InputFilter::IsEnabledForWindow(mWnd) &&
         (aEventMessage == eMouseDown || aEventMessage == eMouseUp)) {
-      FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
-      if (f) {
-        fprintf(f, "[DispatchMouseEvent] result: content=%d apz=%d\n",
-                (int)eventStatus.mContentStatus,
-                (int)eventStatus.mApzStatus);
-        fclose(f);
-      }
+      MOUSEMUX_KEY_LOG("[DispatchMouseEvent] result: content=%d apz=%d",
+                       (int)eventStatus.mContentStatus,
+                       (int)eventStatus.mApzStatus);
     }
+#endif
 
     contextMenuPreventer.Update(mouseOrPointerEvent, eventStatus);
     return ConvertStatus(eventStatus.mContentStatus);
@@ -4935,12 +4929,8 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
       // TranslateMessage call in the WM_MOUSEMUX_KEY handler. Physical
       // keyboard can't generate them because WM_KEYDOWN is blocked above.
       case WM_MOUSEMUX_KEY: {
-        FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-        if (f) {
-          fprintf(f, "[InputFilter] PASSING WM_MOUSEMUX_KEY wParam=0x%llX lParam=0x%llX hwnd=%p\n",
-                  (unsigned long long)wParam, (unsigned long long)lParam, mWnd);
-          fclose(f);
-        }
+        MOUSEMUX_KEY_LOG("[InputFilter] PASSING WM_MOUSEMUX_KEY wParam=0x%llX lParam=0x%llX hwnd=%p",
+                         (unsigned long long)wParam, (unsigned long long)lParam, mWnd);
         break;
       }
 #else
@@ -5343,17 +5333,15 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
 #if MOUSEMUX_INPUT_METHOD == MOUSEMUX_INPUT_GECKO
     case WM_MOUSEMUX_MOTION: {
+#if MOUSEMUX_DEBUG
       static int sMmuxMotionLog = 0;
       if (++sMmuxMotionLog <= 5) {
-        FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
-        if (f) {
-          fprintf(f, "[nsWindow] WM_MOUSEMUX_MOTION: pos=(%d,%d) "
-                  "wParam=0x%llX mWidgetListener=%p\n",
-                  GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
-                  (unsigned long long)wParam, mWidgetListener);
-          fclose(f);
-        }
+        MOUSEMUX_KEY_LOG("[nsWindow] WM_MOUSEMUX_MOTION: pos=(%d,%d) "
+                         "wParam=0x%llX mWidgetListener=%p",
+                         GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
+                         (unsigned long long)wParam, mWidgetListener);
       }
+#endif
       result = DispatchMouseEvent(eMouseMove, wParam, lParam, false,
                                   MouseButton::ePrimary,
                                   MouseEvent_Binding::MOZ_SOURCE_MOUSE);
@@ -5365,17 +5353,13 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
       uint16_t eventFlags = HIWORD(wParam);
       WPARAM dispatchWP = btnState;
 
-      // On any button-down, ensure this window has Win32 focus.
-      // Native WM_LBUTTONDOWN does this via DefWindowProc, but our custom
-      // message bypasses that. Without this, keyboard input fails after
-      // clicking the debug dialog's Capture button.
       bool anyDown = (eventFlags & 0x01) || (eventFlags & 0x04) ||
                      (eventFlags & 0x10);
       if (anyDown) {
-        HWND topLevel = mWnd;
-        HWND parent;
-        while ((parent = ::GetParent(topLevel)) != nullptr) topLevel = parent;
-        if (::GetForegroundWindow() != topLevel) {
+        if (mMouseMuxClient && mMouseMuxClient->ConsumeNeedsForeground()) {
+          HWND topLevel = mWnd;
+          HWND parent;
+          while ((parent = ::GetParent(topLevel)) != nullptr) topLevel = parent;
           ::SetForegroundWindow(topLevel);
         }
         if (::GetFocus() != mWnd) {
@@ -5390,36 +5374,20 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
           (btnState & MK_MBUTTON) != 0,
           (btnState & MK_XBUTTON1) != 0,
           (btnState & MK_XBUTTON2) != 0);
-      {
-        FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
-        if (f) {
-          fprintf(f, "[nsWindow] WM_MOUSEMUX_BUTTON: flags=0x%X btnState=0x%X "
-                  "pos=(%d,%d) HWND=%p mWidgetListener=%p capture=%d\n",
-                  eventFlags, btnState,
-                  GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
-                  mWnd, mWidgetListener, (int)sIsInMouseCapture);
-          fclose(f);
-        }
-      }
+      MOUSEMUX_KEY_LOG("[nsWindow] WM_MOUSEMUX_BUTTON: flags=0x%X btnState=0x%X "
+                       "pos=(%d,%d) HWND=%p mWidgetListener=%p capture=%d",
+                       eventFlags, btnState,
+                       GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
+                       mWnd, mWidgetListener, (int)sIsInMouseCapture);
       if (eventFlags & 0x01) {
-        bool r = DispatchMouseEvent(eMouseDown, dispatchWP, lParam, false,
+        DispatchMouseEvent(eMouseDown, dispatchWP, lParam, false,
                            MouseButton::ePrimary,
                            MouseEvent_Binding::MOZ_SOURCE_MOUSE);
-        FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
-        if (f) {
-          fprintf(f, "[nsWindow]   eMouseDown(primary) result=%d\n", r);
-          fclose(f);
-        }
       }
       if (eventFlags & 0x02) {
-        bool r = DispatchMouseEvent(eMouseUp, dispatchWP, lParam, false,
+        DispatchMouseEvent(eMouseUp, dispatchWP, lParam, false,
                            MouseButton::ePrimary,
                            MouseEvent_Binding::MOZ_SOURCE_MOUSE);
-        FILE* f = fopen("D:/scratch/firefox/mousemux_client.log", "a");
-        if (f) {
-          fprintf(f, "[nsWindow]   eMouseUp(primary) result=%d\n", r);
-          fclose(f);
-        }
       }
       if (eventFlags & 0x04)
         DispatchMouseEvent(eMouseDown, dispatchWP, lParam, false,
@@ -5465,41 +5433,39 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
     case WM_MOUSEMUX_KEY: {
       uint16_t vkey = LOWORD(wParam);
       uint16_t msgType = HIWORD(wParam);
+#if MOUSEMUX_DEBUG
       {
-        FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-        if (f) {
-          fprintf(f, "[Handler] WM_MOUSEMUX_KEY: vkey=0x%X msgType=0x%X hwnd=%p mMouseMuxClient=%p\n",
-                  vkey, msgType, mWnd, mMouseMuxClient ? (void*)1 : (void*)0);
-          fclose(f);
-        }
+        HWND topLevel = mWnd;
+        HWND parent;
+        while ((parent = ::GetParent(topLevel)) != nullptr) topLevel = parent;
+        HWND fg = ::GetForegroundWindow();
+        HWND focus = ::GetFocus();
+        MOUSEMUX_KEY_LOG("[Handler] WM_MOUSEMUX_KEY: vkey=0x%X msgType=0x%X hwnd=%p "
+                         "foreground=%d focus=%d focusHwnd=%p",
+                         vkey, msgType, mWnd,
+                         (fg == topLevel) ? 1 : 0,
+                         (focus == mWnd) ? 1 : 0,
+                         focus);
       }
+#endif
 
       if (mMouseMuxClient && mMouseMuxClient->IsConnected()) {
         nsWindow* focusedWnd = IMEHandler::GetFocusedWindow();
         if (focusedWnd && focusedWnd != this && focusedWnd->mWnd) {
-          {
-            FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-            if (f) {
-              fprintf(f, "[Handler] FORWARDING to focused child hwnd=%p\n", focusedWnd->mWnd);
-              fclose(f);
-            }
-          }
+          MOUSEMUX_KEY_LOG("[Handler] FORWARDING to focused child hwnd=%p", focusedWnd->mWnd);
           ::PostMessage(focusedWnd->mWnd, WM_MOUSEMUX_KEY, wParam, lParam);
           result = true;
           break;
         }
       }
 
-      {
-        FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-        if (f) {
-          fprintf(f, "[Handler] PROCESSING locally: vkey=0x%X msgType=0x%X\n", vkey, msgType);
-          fclose(f);
-        }
+      MOUSEMUX_KEY_LOG("[Handler] PROCESSING locally: vkey=0x%X msgType=0x%X", vkey, msgType);
+      if (::GetFocus() != mWnd) {
+        ::SetFocus(mWnd);
       }
       MSG nativeMsg = WinUtils::InitMSG(msgType, vkey, lParam, mWnd);
       if (msgType == WM_KEYDOWN || msgType == WM_SYSKEYDOWN) {
-        // ::TranslateMessage(&nativeMsg);  // TODO: may cause double chars
+        ::TranslateMessage(&nativeMsg);
         result = ProcessKeyDownMessage(nativeMsg, nullptr);
       } else {
         nativeMsg.time = ::GetMessageTime();

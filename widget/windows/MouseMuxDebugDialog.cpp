@@ -391,11 +391,7 @@ LRESULT MouseMuxDebugDialog::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, L
           return 0;
         }
         case ID_CAPTURE_BTN: {
-          FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-          if (f) {
-            fprintf(f, "[CAPTURE] Button clicked, mClient=%p\n", mClient);
-            fclose(f);
-          }
+          MOUSEMUX_KEY_LOG("[CAPTURE] Button clicked, mClient=%p", mClient);
           if (mClient) {
             uint32_t owner = mClient->GetOwnerHwid();
             if (owner == 0) {
@@ -653,13 +649,7 @@ void MouseMuxDebugDialog::SetCaptureActive(bool aActive) {
     ::SetWindowTextW(mCaptureBtn, aActive ? L"Release Capture" : L"Capture Mouse");
   }
   Log("Capture %s", aActive ? "ACTIVE" : "released");
-  {
-    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-    if (f) {
-      fprintf(f, "[CAPTURE] SetCaptureActive(%d)\n", aActive ? 1 : 0);
-      fclose(f);
-    }
-  }
+  MOUSEMUX_KEY_LOG("[CAPTURE] SetCaptureActive(%d)", aActive ? 1 : 0);
 }
 
 void MouseMuxDebugDialog::ToggleCapture() {

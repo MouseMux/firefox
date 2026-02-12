@@ -190,35 +190,18 @@ void MouseMuxClient::SendReleaseCapture(uint32_t aHwid) {
 }
 
 void MouseMuxClient::RequestCapture(uint32_t aHwid) {
-  {
-    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-    if (f) {
-      fprintf(f, "[CAPTURE] RequestCapture hwid=%u owner=%u\n", aHwid, mOwnerHwid.load());
-      fclose(f);
-    }
-  }
+  MOUSEMUX_KEY_LOG("[CAPTURE] RequestCapture hwid=%u owner=%u", aHwid, mOwnerHwid.load());
+  mNeedsForeground.store(true);
   SendCapture(aHwid, 0);
 }
 
 void MouseMuxClient::RequestReleaseCapture(uint32_t aHwid) {
-  {
-    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-    if (f) {
-      fprintf(f, "[CAPTURE] RequestReleaseCapture hwid=%u owner=%u\n", aHwid, mOwnerHwid.load());
-      fclose(f);
-    }
-  }
+  MOUSEMUX_KEY_LOG("[CAPTURE] RequestReleaseCapture hwid=%u owner=%u", aHwid, mOwnerHwid.load());
   SendReleaseCapture(aHwid);
 }
 
 void MouseMuxClient::Disconnect() {
-  {
-    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-    if (f) {
-      fprintf(f, "[DISCONNECT] owner=%u\n", mOwnerHwid.load());
-      fclose(f);
-    }
-  }
+  MOUSEMUX_KEY_LOG("[DISCONNECT] owner=%u", mOwnerHwid.load());
   // Release capture and owner
   uint32_t owner = mOwnerHwid.load();
   if (owner != 0) {
@@ -548,11 +531,7 @@ void MouseMuxClient::HandleMessage(const std::string& aMessage) {
 
   // Log all non-motion messages to trace state changes
   if (type != "pointer.motion.notify.M2A" && type != "server.ping.notify.M2A") {
-    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-    if (f) {
-      fprintf(f, "[MSG] type=%s owner=%u\n", type.c_str(), mOwnerHwid.load());
-      fclose(f);
-    }
+    MOUSEMUX_KEY_LOG("[MSG] type=%s owner=%u", type.c_str(), mOwnerHwid.load());
   }
 
   if (type == "pointer.motion.notify.M2A") {
@@ -614,13 +593,7 @@ void MouseMuxClient::HandleMessage(const std::string& aMessage) {
 }
 
 void MouseMuxClient::ParseUserList(const std::string& aMessage) {
-  {
-    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-    if (f) {
-      fprintf(f, "[ParseUserList] message=%s\n", aMessage.c_str());
-      fclose(f);
-    }
-  }
+  MOUSEMUX_KEY_LOG("[ParseUserList] message=%s", aMessage.c_str());
   std::lock_guard<std::mutex> lock(mMappingMutex);
   mMouseToKeyboard.clear();
   mDeviceToUser.clear();
@@ -707,17 +680,15 @@ void MouseMuxClient::ParseUserList(const std::string& aMessage) {
     searchPos = devArrayEnd;
   }
 
+#if MOUSEMUX_DEBUG
   {
-    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-    if (f) {
-      fprintf(f, "[ParseUserList] %zu mappings, %zu device-to-user entries:\n",
-              mMouseToKeyboard.size(), mDeviceToUser.size());
-      for (const auto& pair : mMouseToKeyboard) {
-        fprintf(f, "  pointer %u -> keyboard %u\n", pair.first, pair.second);
-      }
-      fclose(f);
+    MOUSEMUX_KEY_LOG("[ParseUserList] %zu mappings, %zu device-to-user entries:",
+                     mMouseToKeyboard.size(), mDeviceToUser.size());
+    for (const auto& pair : mMouseToKeyboard) {
+      MOUSEMUX_KEY_LOG("  pointer %u -> keyboard %u", pair.first, pair.second);
     }
   }
+#endif
   Log("User list updated: %zu mappings, %zu devices", mMouseToKeyboard.size(), mDeviceToUser.size());
 }
 
@@ -849,13 +820,7 @@ void MouseMuxClient::HandlePointerButton(uint32_t aHwid, int aScreenX, int aScre
   if (isButtonDown && inWindow && owner == 0) {
     mOwnerHwid.store(aHwid);
     Log("New owner: hwid=0x%X (locked)", aHwid);
-    {
-      FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-      if (f) {
-        fprintf(f, "[OWNER] New owner set: hwid=%u\n", aHwid);
-        fclose(f);
-      }
-    }
+    MOUSEMUX_KEY_LOG("[OWNER] New owner set: hwid=%u", aHwid);
     UpdateDebugStatusSafe();
     isOwner = true;
   }
@@ -919,14 +884,8 @@ void MouseMuxClient::HandlePointerWheel(uint32_t aHwid, int aScreenX, int aScree
 void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMessage,
                                     uint32_t aScanCode, uint32_t aFlags) {
   uint32_t owner = mOwnerHwid.load();
-  {
-    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-    if (f) {
-      fprintf(f, "[HandleKeyboard] ENTER: hwid=%u vkey=0x%X msg=0x%X owner=%u mOwnerHwnd=%p\n",
-              aHwid, aVkey, aMessage, owner, mOwnerHwnd);
-      fclose(f);
-    }
-  }
+  MOUSEMUX_KEY_LOG("[HandleKeyboard] ENTER: hwid=%u vkey=0x%X msg=0x%X owner=%u mOwnerHwnd=%p",
+                   aHwid, aVkey, aMessage, owner, mOwnerHwnd);
   if (owner == 0) return;
 
   // Check if this keyboard belongs to the same user as the owner pointer.
@@ -939,13 +898,7 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
     int kbUser = (kbIt != mDeviceToUser.end()) ? kbIt->second : 0;
     int ownerUser = (ownerIt != mDeviceToUser.end()) ? ownerIt->second : 0;
 
-    {
-      FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-      if (f) {
-        fprintf(f, "[HandleKeyboard] kbUser=%d ownerUser=%d owner=%u\n", kbUser, ownerUser, owner);
-        fclose(f);
-      }
-    }
+    MOUSEMUX_KEY_LOG("[HandleKeyboard] kbUser=%d ownerUser=%d owner=%u", kbUser, ownerUser, owner);
     // Reject if both are mapped to known but different users
     if (kbUser != 0 && ownerUser != 0 && kbUser != ownerUser) return;
   }
@@ -964,14 +917,8 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
       bool shiftHeld = InputFilter::IsKeyDown(mOwnerHwnd, VK_SHIFT);
 
       if (aVkey == hotkey && shiftHeld == needShift) {
-        {
-          FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-          if (f) {
-            fprintf(f, "[HOTKEY] Capture hotkey pressed: vkey=0x%X owner=%u captureActive=%d\n",
-                    aVkey, owner, dlg->IsCaptureActive() ? 1 : 0);
-            fclose(f);
-          }
-        }
+        MOUSEMUX_KEY_LOG("[HOTKEY] Capture hotkey pressed: vkey=0x%X owner=%u captureActive=%d",
+                         aVkey, owner, dlg->IsCaptureActive() ? 1 : 0);
         if (owner != 0) {
           dlg->ToggleCapture();
           if (dlg->IsCaptureActive()) {
@@ -1037,14 +984,8 @@ void MouseMuxClient::HandleKeyboard(uint32_t aHwid, uint32_t aVkey, uint32_t aMe
   }
 
   WPARAM wp = MAKEWPARAM(aVkey, aMessage);
-  {
-    FILE* f = fopen("D:/scratch/firefox/mousemux_key.log", "a");
-    if (f) {
-      fprintf(f, "[HandleKeyboard] PostMessage WM_MOUSEMUX_KEY: vkey=0x%X msg=0x%X wp=0x%llX lParam=0x%llX hwnd=%p\n",
-              aVkey, aMessage, (unsigned long long)wp, (unsigned long long)lParam, mOwnerHwnd);
-      fclose(f);
-    }
-  }
+  MOUSEMUX_KEY_LOG("[HandleKeyboard] PostMessage WM_MOUSEMUX_KEY: vkey=0x%X msg=0x%X wp=0x%llX lParam=0x%llX hwnd=%p",
+                   aVkey, aMessage, (unsigned long long)wp, (unsigned long long)lParam, mOwnerHwnd);
   ::PostMessage(mOwnerHwnd, WM_MOUSEMUX_KEY, wp, lParam);
 }
 

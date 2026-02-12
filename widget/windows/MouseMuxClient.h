@@ -28,8 +28,17 @@
 #define MOUSEMUX_MARKER 0x80000000
 
 // Build configuration
-#define MOUSEMUX_DEBUG       0  // Enable file logging and verbose debug output
+#define MOUSEMUX_DEBUG       1  // Enable file logging and verbose debug output
 #define MOUSEMUX_STALE_CODE  0  // Enable legacy/unused code paths
+
+#if MOUSEMUX_DEBUG
+#define MOUSEMUX_KEY_LOG(fmt, ...) do { \
+    FILE* _f = fopen("D:/scratch/firefox/mousemux_key.log", "a"); \
+    if (_f) { fprintf(_f, fmt "\n", ##__VA_ARGS__); fclose(_f); } \
+  } while (0)
+#else
+#define MOUSEMUX_KEY_LOG(fmt, ...) ((void)0)
+#endif
 
 // Input injection method: GECKO dispatches WidgetMouseEvent via custom WM_,
 // POSTMSG uses legacy PostMessage(WM_LBUTTONDOWN, ...) with MOUSEMUX_MARKER.
@@ -73,6 +82,11 @@ class MouseMuxClient {
   // Capture control (called from dialog)
   void RequestCapture(uint32_t aHwid);
   void RequestReleaseCapture(uint32_t aHwid);
+
+  // One-shot: set after capture, cleared after first click restores foreground
+  bool ConsumeNeedsForeground() {
+    return mNeedsForeground.exchange(false);
+  }
 
   // Get the Firefox window this client is attached to
   HWND GetWindowHwnd() const { return mOwnerHwnd; }
@@ -121,6 +135,7 @@ class MouseMuxClient {
   HWND mOwnerHwnd;
   std::atomic<uint32_t> mOwnerHwid{0};
   std::atomic<bool> mOwnerInWindow{false};   // Owner mouse is inside window
+  std::atomic<bool> mNeedsForeground{false}; // One-shot: SetForegroundWindow on next click after capture
 
   // Connection state
   std::wstring mServerUrl;
