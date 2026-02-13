@@ -30,6 +30,7 @@
 // Build configuration
 #define MOUSEMUX_DEBUG       0  // Enable file logging and verbose debug output
 #define MOUSEMUX_STALE_CODE  0  // Enable legacy/unused code paths
+#define EXPERIMENT_KEYS_EARLY_BLOCK 1  // Block native keyboard in message loop before TranslateMessage
 
 #if MOUSEMUX_DEBUG
 #define MOUSEMUX_KEY_LOG(fmt, ...) do { \

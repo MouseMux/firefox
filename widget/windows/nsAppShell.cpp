@@ -17,6 +17,8 @@
 #include "nsWindow.h"
 #include "nsString.h"
 #include "WinIMEHandler.h"
+#include "InputFilter.h"
+#include "MouseMuxClient.h"
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/Hal.h"
 #include "nsIDOMWakeLockListener.h"
@@ -261,6 +263,12 @@ SingleNativeEventPump::OnProcessNextEvent(nsIThreadInternal* aThread,
   MSG msg;
   bool gotMessage = WinUtils::PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE);
   if (gotMessage) {
+#if EXPERIMENT_KEYS_EARLY_BLOCK
+    if (msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST &&
+        InputFilter::IsEnabledForWindow(msg.hwnd)) {
+      return NS_OK;  // drop native keyboard message
+    }
+#endif
     ::TranslateMessage(&msg);
     ::DispatchMessageW(&msg);
   }
@@ -748,6 +756,20 @@ bool nsAppShell::ProcessNextNativeEvent(bool mayWait) {
         // If we had UI activity we would be processing it now so we know we
         // have either kUIActivity or kActivityNoUIAVail.
         mozilla::BackgroundHangMonitor().NotifyActivity();
+
+#if EXPERIMENT_KEYS_EARLY_BLOCK
+        // Block native keyboard messages BEFORE TranslateMessage and
+        // ProcessRawKeyMessage. Without this, native WM_KEYDOWN passes
+        // through TranslateMessage (generating orphan WM_CHAR) and through
+        // TSF/IME (ProcessRawKeyMessage) before the InputFilter gate in
+        // ProcessMessage ever sees it. This causes double key input when
+        // MouseMux is in switch mode (no keyboard hook).
+        // WM_MOUSEMUX_KEY is unaffected: it's WM_USER+103, outside WM_KEY*.
+        if (msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST &&
+            InputFilter::IsEnabledForWindow(msg.hwnd)) {
+          continue;  // drop native keyboard message entirely
+        }
+#endif
 
         if (msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST &&
             IMEHandler::ProcessRawKeyMessage(msg)) {
