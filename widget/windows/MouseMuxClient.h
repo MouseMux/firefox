@@ -28,7 +28,7 @@
 #define MOUSEMUX_MARKER 0x80000000
 
 // Build configuration
-#define MOUSEMUX_DEBUG       1  // Enable file logging and verbose debug output
+#define MOUSEMUX_DEBUG       0  // Enable file logging and verbose debug output
 #define MOUSEMUX_STALE_CODE  0  // Enable legacy/unused code paths
 
 #if MOUSEMUX_DEBUG

@@ -313,7 +313,7 @@ void MouseMuxDebugDialog::CreateDialogWindow() {
   contentY += 45;
 
   // Resize dialog to fit content (contentY + title bar + border)
-  int finalHeight = contentY + 45;
+  int finalHeight = contentY + 51;
   ::SetWindowPos(mDialog, nullptr, 0, 0, width, finalHeight, SWP_NOMOVE | SWP_NOZORDER);
 
   // Start a timer to periodically update status (connection is async)
