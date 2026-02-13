@@ -4,7 +4,7 @@ Firefox build with MouseMux SDK integration for per-user window ownership.
 
 ## Version
 
-- **MouseMux Integration**: v5.57 (in progress)
+- **MouseMux Integration**: v5.58
 - **Firefox Base**: 148.0a1 (Nightly)
 - **Platform**: Windows x64
 - **SDK Protocol**: v2.2.35
@@ -31,7 +31,7 @@ Firefox build with MouseMux SDK integration for per-user window ownership.
 - Custom window messages: WM_MOUSEMUX_MOTION, WM_MOUSEMUX_BUTTON, WM_MOUSEMUX_WHEEL, WM_MOUSEMUX_KEY
 - No marker bit hack needed (custom message IDs separate MouseMux from native)
 
-### Debug Dialog (F9 / Ctrl+Shift+M)
+### Debug Dialog (F11)
 - Docked panel that follows Firefox window position
 - Connect/Disconnect with auto-login/logout
 - Capture toggle button with hotkey support

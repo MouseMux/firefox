@@ -1,4 +1,4 @@
-# MouseMux Architecture (v5.57)
+# MouseMux Architecture (v5.58)
 
 ## Overview
 MouseMux provides multi-mouse/keyboard support for Firefox on Windows. It connects
@@ -91,6 +91,7 @@ case WM_MOUSEMUX_KEY:
 **WM_MOUSEMUX_KEY**: Keyboard input via ProcessKeyDownMessage/ProcessKeyUpMessage.
 - Extracts vkey from LOWORD(wParam), msgType from HIWORD(wParam)
 - Forwards to IMEHandler::GetFocusedWindow() if different from current window
+- Syncs key state to InputFilter buffer (authoritative, fixes modifier race condition)
 - Calls SetFocus (internal, works without foreground)
 - Calls TranslateMessage to generate WM_CHAR for NativeKey character resolution
 - Calls ProcessKeyDownMessage/ProcessKeyUpMessage for Gecko dispatch
@@ -209,3 +210,4 @@ Defined in `MouseMuxClient.h`:
 - v5.55: Fix keyboard - TranslateMessage + SetFocus enables typing without foreground
 - v5.56: Block native WM_CHAR in InputFilter to fix double key input
 - v5.57: Fix modifier keys - dual-thread key state sync (worker early + UI authoritative)
+- v5.58: Release build - disable debug logging, fix dialog bottom padding
